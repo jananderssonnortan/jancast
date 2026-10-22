@@ -1,0 +1,9 @@
+.venv/
+build/
+app/.build/
+__pycache__/
+*.pyc
+.DS_Store
+.claude/settings.local.json
+.claude/worktrees/
+.env

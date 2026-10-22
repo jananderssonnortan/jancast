@@ -1,0 +1,4 @@
+#!/bin/sh
+# Run jancast from its venv: bin/jancast movie.mkv
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" exec "$ROOT/.venv/bin/python" -m jancast "$@"
