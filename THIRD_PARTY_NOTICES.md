@@ -1,16 +1,28 @@
 # Third-party notices
 
 jancast's own code is MIT-licensed (see `LICENSE`). It builds on the work below.
-None of it is bundled in this repository: Python packages are installed with
-pip from `requirements.txt`, ffmpeg is installed separately (e.g. Homebrew),
-and Apple's frameworks come with macOS.
+None of it is in this repository: when you build from source, Python packages
+are installed with pip from `requirements.txt`, ffmpeg is installed separately
+(e.g. Homebrew), and Apple's frameworks come with macOS.
+
+The downloadable app (`Jancast-<version>.dmg`, made by `app/package-app.sh`)
+does bundle them, unmodified, in `Jancast.app/Contents/Resources`:
+
+- Python from [python-build-standalone](https://github.com/astral-sh/python-build-standalone)
+  (PSF-2.0; its licence is in `python/lib/python3.14/LICENSE.txt`), with the
+  packages below installed by pip (each one's licence is in its
+  `*.dist-info` folder under `python/lib/python3.14/site-packages`).
+- `ffmpeg` and `ffprobe`, built from the unmodified
+  [FFmpeg 8.1.2 source](https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz) without
+  any GPL or non-free parts, so under the LGPL-2.1-or-later. The exact configure
+  line is in `package-app.sh`; `licenses/` in the app has the LGPL text.
 
 ## Runtime dependencies
 
 | Component | Used for | Licence |
 |---|---|---|
 | [pyatv](https://pyatv.dev) © Pierre Ståhl and contributors | AirPlay / MediaRemote / Companion protocols to the Apple TV | MIT |
-| [FFmpeg](https://ffmpeg.org) (ffmpeg, ffprobe) | Probing, remuxing / encoding to HLS, thumbnails | LGPL-2.1-or-later; GPL builds (e.g. with x264/x265, as in Homebrew) are GPL-2.0-or-later. Run as a separate program, not linked. |
+| [FFmpeg](https://ffmpeg.org) (ffmpeg, ffprobe) | Probing, remuxing / encoding to HLS, thumbnails | LGPL-2.1-or-later; GPL builds (e.g. with x264/x265, as in Homebrew) are GPL-2.0-or-later. Run as a separate program, not linked. The downloadable app bundles an LGPL build. |
 | Apple frameworks (SwiftUI, AVKit, AVFoundation, Vision, Charts, …) | The macOS app, the This Mac player, OCR of picture subtitles | Part of macOS |
 
 ### Installed with pyatv (pip)
@@ -25,7 +37,7 @@ and Apple's frameworks come with macOS.
 | certifi | MPL-2.0 |
 | zeroconf | LGPL-2.1-or-later (used as an installed library, unmodified) |
 
-Versions as of jancast 1.0; `pip show <package>` gives each one's licence.
+Versions as of jancast 1.1; `pip show <package>` gives each one's licence.
 
 ## Artwork and screenshots
 

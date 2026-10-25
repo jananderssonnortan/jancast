@@ -618,6 +618,52 @@ class PlayUntilDoneTest(TempDirMixin, unittest.IsolatedAsyncioTestCase):
         self.assert_all_closed()
 
 
+    async def test_lost_connection_reconnects_where_the_tv_was(self):
+        # The Mac slept (or Wi-Fi dropped): play_url fails with a lost
+        # connection; the session connects again and goes on from the last
+        # position the TV reported instead of failing.
+        from pyatv import exceptions as atv_errors
+        orig, calls = self.devices.connect, []
+
+        async def connect(conf):
+            atv = await orig(conf)
+            if not calls:
+                async def lost(url, position=0):
+                    calls.append(position)
+                    self.s.playback["position"] = 1234.0
+                    raise atv_errors.ConnectionLostError("connection was lost")
+                atv.stream.play_url = lost
+                calls.append("connected")
+            return atv
+
+        self.no_remote()
+        self.devices.connect = connect
+        with mock.patch.object(session_mod, "RECONNECT_DELAYS", (0, 0)):
+            run = asyncio.ensure_future(self.s._play_until_done(12.0))
+            await self.wait_for_calls(1)
+            self.assertEqual(self.devices.play_calls, [(self.URL, 1234.0)])
+            self.assertEqual(self.s.phase, "connecting")
+            self.assertTrue(any("reconnecting in 0 s (attempt 1 of 2, from 1234 s)" in m
+                                for m in self.messages()))
+            run.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await run
+        self.assert_all_closed()
+
+    async def test_lost_connection_gives_up_after_the_last_attempt(self):
+        from pyatv import exceptions as atv_errors
+
+        async def connect(conf):
+            raise atv_errors.ConnectionFailedError("no route to host")
+
+        self.no_remote()
+        self.devices.connect = connect
+        with mock.patch.object(session_mod, "RECONNECT_DELAYS", (0, 0)):
+            with self.assertRaisesRegex(atv_errors.ConnectionFailedError, "no route"):
+                await self.s._play_until_done(0.0)
+        self.assertEqual(sum("reconnecting" in m for m in self.messages()), 2)
+
+
 class SeekDuringRestartTest(TempDirMixin, unittest.TestCase):
     """Regression: a second seek while playback restarts for the first one used
     to fail with "nothing is playing"; it must retarget the pending restart."""

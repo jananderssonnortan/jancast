@@ -51,7 +51,7 @@ class Controller:
 
     def probe(self, path, remember=True, thumbs=True):
         try:
-            media = probe(path)
+            media = self._completed_download(path) or probe(path)
         except MediaError as e:
             raise ApiError(str(e)) from e
         self.media_cache[str(media.path)] = media
@@ -62,6 +62,7 @@ class Controller:
         vmode, reason = media.video_plan(None)
         return {
             "path": str(media.path), "name": media.path.name, "size_bytes": media.size_bytes,
+            "downloading": media.partial,
             "duration_s": media.duration, "name_info": names.parse(media.path),
             "video": {"codec": media.video_codec, "width": media.video.get("width"),
                       "height": media.video.get("height"), "hdr": media.hdr,
@@ -80,6 +81,13 @@ class Controller:
             "resume": history.resume_info(media.path),
             "next": episodes.next_episode(media.path),
         }
+
+    def _completed_download(self, path):
+        """The probe of a download in progress that has since been renamed to
+        `path`, so its thumbnails and subtitles carry over to the finished file."""
+        key = Path(path).expanduser().resolve()
+        return next((m for k, m in list(self.media_cache.items())
+                     if k != str(key) and m.path == key), None)
 
     def _media(self, path):
         key = str(Path(path).expanduser().resolve())

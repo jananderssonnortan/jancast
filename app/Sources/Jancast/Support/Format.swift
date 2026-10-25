@@ -208,6 +208,10 @@ enum Fmt {
 
     static func cleanTitle(_ filename: String) -> String {
         var base = (filename as NSString).deletingPathExtension
+        // "movie.mkv.part": a download in progress.
+        if ["part", "!qb", "!ut", "crdownload"].contains((filename as NSString).pathExtension.lowercased()) {
+            base = (base as NSString).deletingPathExtension
+        }
         if base.isEmpty { base = filename }
         let tokens = base.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: ".", with: " ")
             .split(separator: " ").map(String.init)

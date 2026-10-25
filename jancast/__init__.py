@@ -1,3 +1,3 @@
 """jancast - AirPlay MKV files to an Apple TV, with audio and subtitle selection."""
 
-__version__ = "1.0"
+__version__ = "1.1"

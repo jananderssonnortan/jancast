@@ -8,8 +8,10 @@ struct RootView: View {
     @State private var dropTargeted = false
     @AppStorage("diagnosticsDrawerHeight") private var drawerHeight = 380.0
 
-    /// The window stays remote-shaped: one column, never wide.
-    static let maxWidth = 560.0
+    /// The window is remote-shaped and its width fixed: exactly the remote's
+    /// column, so every screen gets the same layout. Only the height changes
+    /// (from 640 pt, which fits the smallest MacBook screens).
+    static let width = RemoteLayout.columnWidth
 
     /// Remote height the drawer leaves when it can (pill to transport).
     private static let remoteKeep = 560.0
@@ -20,11 +22,16 @@ struct RootView: View {
     var body: some View {
         @Bindable var model = model
         detail
-        .frame(minWidth: 400, maxWidth: Self.maxWidth, minHeight: 640)
+        // The film's accent everywhere, the drawer and toolbar included.
+        .tint(model.ambience?.tint)
+        .frame(width: Self.width)
+        .frame(minHeight: 640)
         .navigationTitle(title)
         .navigationSubtitle(subtitle)
         .toolbar { MainToolbar() }
         .modifier(HiddenWindowTitle())
+        .modifier(ClearToolbar())
+        .modifier(WindowBackdrop())
         .dropDestination(for: URL.self) { urls, _ in
             guard model.backendStatus == .running, let url = urls.first(where: { $0.isFileURL }) else { return false }
             model.playerVisible = false
@@ -70,12 +77,19 @@ struct RootView: View {
         Group {
             switch model.backendStatus {
             case .starting:
-                StartingView()
+                Color.clear
             case .failed(let message, let log):
                 BackendFailedView(message: message, log: log)
             case .running:
+                // Laid out (and measured) while hidden; shown at once when ready.
                 RemoteLayout()
+                    .opacity(model.ready ? 1 : 0)
+                    .allowsHitTesting(model.ready)
             }
+        }
+        .animation(.easeOut(duration: 0.35), value: model.ready)
+        .overlay {
+            if case .failed = model.backendStatus {} else if !model.ready { StartingView() }
         }
     }
 
@@ -125,6 +139,43 @@ private struct HiddenWindowTitle: ViewModifier {
     }
 }
 
+/// The toolbar lets the remote's backdrop show through instead of drawing a
+/// band of its own above it (macOS 15+; older systems keep the band).
+private struct ClearToolbar: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content.toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        } else {
+            content
+        }
+    }
+}
+
+/// The remote's ambience as the window's background: from the top of the
+/// window (under the toolbar) to about where the library starts (a fixed
+/// height, `RemoteLayout.backdropHeight`),
+/// over a fainter wash of the same colours under the library.
+private struct WindowBackdrop: ViewModifier {
+    @Environment(AppModel.self) private var model
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15.0, *) {
+            content.containerBackground(for: .window) {
+                GeometryReader { geo in
+                    AmbientBackdrop(image: model.ambience?.backdrop, scene: model.backdropScene)
+                        .frame(height: min(model.remoteTop + RemoteLayout.backdropHeight, geo.size.height))
+                        .frame(maxHeight: .infinity, alignment: .top)
+                }
+                .background {
+                    LibraryWash(palette: model.washPalette, fallback: model.ambience?.backdrop).background(.background)
+                }
+            }
+        } else {
+            content
+        }
+    }
+}
+
 private struct DropTargetedKey: EnvironmentKey { static let defaultValue = false }
 extension EnvironmentValues {
     var isDropTargeted: Bool {
@@ -146,6 +197,11 @@ private struct MainToolbar: ToolbarContent {
         } else {
             deviceItem
         }
+        // Without the title there is no flexible space before the buttons, so
+        // they would sit right after the TV menu instead of at the right edge.
+        if #available(macOS 26.0, *) {
+            ToolbarSpacer(.flexible)
+        }
         ToolbarItemGroup(placement: .primaryAction) {
             Button { model.presentOpenPanel() } label: { Label("Open", systemImage: "folder") }
                 .help("Open a video (⌘O)")
@@ -159,12 +215,22 @@ private struct MainToolbar: ToolbarContent {
 
     private var deviceItem: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
-            if model.showsPlayer, let name = model.live?.session?.device?.name {
-                DeviceSwitchMenu(name: name)
-            } else if model.backendStatus == .running {
-                DevicePicker()
+            Group {
+                if model.showsPlayer, let name = model.live?.session?.device?.name {
+                    DeviceSwitchMenu(name: name)
+                } else if model.backendStatus == .running && model.ready {
+                    DevicePicker()
+                }
             }
+            .padding(.leading, Self.deviceInset)
         }
+    }
+
+    /// On macOS 26 the menu is bare text right after the window buttons, which
+    /// looks cramped; older systems draw it in a capsule that already has room.
+    private static var deviceInset: CGFloat {
+        if #available(macOS 26.0, *) { return 14 }
+        return 0
     }
 
     private var diagnosticsHelp: String {
@@ -203,7 +269,11 @@ private struct DiagnosticsGlyph: View {
     }
 }
 
+/// Only when starting takes a while (the first run, a slow disk): a quick
+/// launch shows just the window's colours and then the remote, no flash of this.
 private struct StartingView: View {
+    @State private var shown = false
+
     var body: some View {
         VStack(spacing: 14) {
             ProgressView().controlSize(.large)
@@ -211,6 +281,12 @@ private struct StartingView: View {
             Text("Launching the streaming backend").foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .opacity(shown ? 1 : 0)
+        .animation(.easeIn(duration: 0.3), value: shown)
+        .task {
+            try? await Task.sleep(for: .seconds(1.2))
+            shown = true
+        }
     }
 }
 
@@ -251,7 +327,9 @@ private struct BackendFailedView: View {
                 .frame(maxWidth: 820)
                 .padding(.horizontal, 30)
             }
-            Text("Backend folder: \(BackendProcess.backendDirectory.path) (override with JANCAST_BACKEND_DIR). Launch with --mock to preview the app without it.")
+            Text(BackendProcess.bundledRuntime != nil
+                 ? "The backend is inside the app. Launch with --mock to preview the app without it."
+                 : "Backend folder: \(BackendProcess.backendDirectory.path) (override with JANCAST_BACKEND_DIR). Launch with --mock to preview the app without it.")
                 .font(.caption).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 30)

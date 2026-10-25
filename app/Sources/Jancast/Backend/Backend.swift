@@ -14,6 +14,8 @@ protocol Backend: AnyObject {
     var onUnexpectedExit: ((String, String) -> Void)? { get set }
 
     func probe(path: String) async throws -> ProbeResult
+    /// A probe that doesn't list the file in Recents (`remember=0`).
+    func peek(path: String) async throws -> ProbeResult
     func recent(limit: Int) async throws -> RecentResponse
     func devices(_ query: DeviceQuery) async throws -> DevicesResponse
     func pair(deviceID: String) async throws -> OKResponse

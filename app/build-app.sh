@@ -1,6 +1,7 @@
 #!/bin/bash
 # Builds Jancast.app into ../build/Jancast.app
 #   ./build-app.sh            release build + bundle + ad-hoc signature
+# (package-app.sh builds the self-contained, downloadable version on top of this.)
 # Run the result:  open ../build/Jancast.app            (real backend)
 #                  open ../build/Jancast.app --args --mock   (simulated data)
 set -euo pipefail
@@ -9,6 +10,9 @@ APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$APP_DIR/.." && pwd)"
 OUT="$ROOT/build/Jancast.app"
 ICON_CACHE="$APP_DIR/.build/icon"
+VERSION="${VERSION:-1.1}"
+# Always increasing, also when VERSION stays the same: the updater compares it.
+BUILD="${BUILD:-$(date -u +%Y%m%d%H%M)}"
 
 cd "$APP_DIR"
 swift build -c release
@@ -55,8 +59,8 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
   <key>CFBundleDisplayName</key><string>Jancast</string>
   <key>CFBundleExecutable</key><string>Jancast</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$BUILD</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   $ICON_KEY
@@ -84,7 +88,7 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
       <key>CFBundleTypeName</key><string>Video</string>
       <key>CFBundleTypeRole</key><string>Viewer</string>
       <key>LSHandlerRank</key><string>Alternate</string>
-      <key>CFBundleTypeExtensions</key><array><string>mkv</string><string>mp4</string><string>m4v</string><string>mov</string></array>
+      <key>CFBundleTypeExtensions</key><array><string>mkv</string><string>mp4</string><string>m4v</string><string>mov</string><string>avi</string><string>ts</string><string>m2ts</string><string>webm</string><string>part</string></array>
     </dict>
   </array>
 </dict>

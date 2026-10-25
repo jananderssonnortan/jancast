@@ -9,6 +9,7 @@ import subprocess
 import threading
 from pathlib import Path
 
+from . import names, ocrsubs
 from .config import cache_dir
 
 # Codecs Apple TV plays natively from HLS fMP4, so they can be copied as-is.
@@ -58,7 +59,7 @@ class Track:
     @property
     def via_ocr(self):
         """Picture subtitles shown as text (recognised with macOS Vision)."""
-        return self.codec in OCR_SUBS and shutil.which("swiftc") is not None
+        return self.codec in OCR_SUBS and ocrsubs.possible()
 
     @property
     def burns_in(self):
@@ -78,8 +79,13 @@ class Track:
 
 class MediaInfo:
     def __init__(self, path, probe):
-        self.path = path
-        self.size_bytes = path.stat().st_size
+        self._path = path
+        st = path.stat()
+        self.size_bytes = st.st_size
+        # Names this file in caches (thumbnails, subtitles). Fixed when probed, so
+        # a download that is still being written or renamed keeps its caches.
+        self.fingerprint = f"{path}|{st.st_size}|{st.st_mtime}"
+        self.partial = names.is_partial(path)
         self.duration = float(probe["format"].get("duration") or 0)
         self.video = None
         self.audio = []
@@ -104,6 +110,14 @@ class MediaInfo:
         if not self.audio:
             raise MediaError("no audio stream found")
         self.subs += find_sidecar_subs(path)
+
+    @property
+    def path(self):
+        """The file, following a partial download ("movie.mkv.part") to its
+        finished name once the download client has renamed it."""
+        if self.partial and (done := names.completed(self._path)):
+            self._path, self.partial = done, False
+        return self._path
 
     @property
     def video_codec(self):
@@ -144,6 +158,7 @@ def audio_plan(track, stereo):
 
 def probe(path):
     path = Path(path).expanduser().resolve()
+    path = names.completed(path) or path
     if not path.is_file():
         raise MediaError(f"no such file: {path}")
     try:
@@ -162,8 +177,7 @@ def probe(path):
 def extract_text_subtitles(media, sub):
     """An embedded text subtitle track as a WebVTT file (cached), so it can be
     shifted like a sidecar file."""
-    st = media.path.stat()
-    key = hashlib.sha1(f"{media.path}|{st.st_size}|{st.st_mtime}|{sub.index}".encode()).hexdigest()[:16]
+    key = hashlib.sha1(f"{media.fingerprint}|{sub.index}".encode()).hexdigest()[:16]
     out = cache_dir() / "subs" / f"{key}.vtt"
     if out.exists():
         os.utime(out)               # recently used: kept by the cache trim
@@ -179,17 +193,119 @@ def extract_text_subtitles(media, sub):
     return out
 
 
+def _listdir(d):
+    try:
+        return sorted(d.iterdir())
+    except OSError:
+        return []
+
+
+# Subtitle file names say the language as a code ("eng", "sv") or a name
+# ("English.srt", as in a film's "Subs" folder).
+LANG_NAMES = {
+    "english": "en", "swedish": "sv", "svenska": "sv", "french": "fr", "francais": "fr",
+    "german": "de", "deutsch": "de", "spanish": "es", "espanol": "es", "italian": "it",
+    "portuguese": "pt", "brazilian": "pt", "dutch": "nl", "danish": "da", "dansk": "da",
+    "finnish": "fi", "suomi": "fi", "norwegian": "nb", "norsk": "nb", "polish": "pl",
+    "russian": "ru", "japanese": "ja", "chinese": "zh", "korean": "ko", "arabic": "ar",
+    "hebrew": "he", "turkish": "tr", "greek": "el", "czech": "cs", "hungarian": "hu",
+    "romanian": "ro", "ukrainian": "uk", "vietnamese": "vi", "thai": "th", "indonesian": "id",
+    "icelandic": "is", "croatian": "hr", "serbian": "sr", "bulgarian": "bg", "slovak": "sk",
+    "slovenian": "sl", "estonian": "et", "latvian": "lv", "lithuanian": "lt", "malay": "ms",
+    "hindi": "hi", "catalan": "ca",
+}
+SUBS_FOLDERS = {"subs", "sub", "subtitles", "subtitle"}
+
+
+def parse_sub_name(text, folder_lang=""):
+    """Language (2-letter where one exists), title and forced from the part of
+    a subtitle file's name that isn't the video's: "en", "sv.forced",
+    "SDH.eng" (English, "SDH"), "Forced.eng", "English", "2_English",
+    "Canadian.fre" (French, "Canadian"). Other words become the title."""
+    lang, forced, words = "", False, []
+    for tok in re.split(r"[._\- ]+", text):
+        low = tok.lower()
+        if not tok or tok.isdigit():
+            continue
+        if low in ("forced", "foreign"):
+            forced = True
+        elif not lang and low in LANG_NAMES:
+            lang = LANG_NAMES[low]
+        elif not lang and (low in ISO639_2_TO_1 or low in ISO639_2_TO_1.values()):
+            lang = ISO639_2_TO_1.get(low, low)
+        else:
+            words.append(tok)
+    if not lang and folder_lang:
+        lang = parse_sub_name(folder_lang)[0] or folder_lang
+    return lang, " ".join(words), forced
+
+
 def find_sidecar_subs(path):
-    """Subtitle files next to the video, e.g. movie.srt or movie.en.srt."""
-    tracks = []
-    for f in sorted(path.parent.iterdir()):
+    """Subtitle files for the video: movie.srt or movie.en.srt next to it or in a
+    subfolder ("Eng/movie.eng.srt", "Subs/movie.srt"), any subtitle file in
+    "Subs/movie/" ("Subs/movie/2_English.srt"), and - when the video is the
+    only one in its folder - every subtitle file in a "Subs" folder, named by
+    language alone ("Subs/English.srt", "Subs/SDH.eng.srt"). Exact copies are
+    listed once. A download in progress ("movie.mkv.part") matches by its
+    finished name."""
+    path = names.without_partial(path)
+    def is_sub(f):
+        return f.suffix.lower() in SIDECAR_EXTS and f.is_file()
+
+    def is_named_for_video(f):
         # "movie.srt" or "movie.<lang...>.srt" - not "movie2.srt" or "movie-extras.srt".
-        if f.suffix.lower() in SIDECAR_EXTS and (
-                f.name == path.stem + f.suffix or f.name.startswith(path.stem + ".")):
-            lang = f.name[len(path.stem):-len(f.suffix)].strip(".")
-            codec = {".srt": "subrip", ".vtt": "webvtt"}.get(f.suffix.lower(), "ass")
-            tracks.append(Track("sub", 0, codec, lang=lang, file=f))
-    return tracks
+        return f.name == path.stem + f.suffix or f.name.startswith(path.stem + ".")
+
+    def track(f, text, folder_lang=""):
+        codec = {".srt": "subrip", ".vtt": "webvtt"}.get(f.suffix.lower(), "ass")
+        lang, title, forced = parse_sub_name(text, folder_lang)
+        return Track("sub", 0, codec, lang=lang, title=title, forced=forced, file=f)
+
+    def named_for_video(d, folder_lang=""):
+        return [track(f, f.name[len(path.stem):-len(f.suffix)], folder_lang)
+                for f in _listdir(d) if is_sub(f) and is_named_for_video(f)]
+
+    tracks = named_for_video(path.parent)
+    for d in _listdir(path.parent):
+        if not d.is_dir() or d.name.startswith("."):
+            continue
+        # A folder per language ("Eng", "Rus") names the language of its files.
+        name = d.name.lower()
+        tracks += named_for_video(d, name if len(name) in (2, 3) and name.isalpha() else "")
+        if (per_video := d / path.stem).is_dir():
+            tracks += [track(f, f.stem) for f in _listdir(per_video) if is_sub(f)]
+        if name in SUBS_FOLDERS and _only_video_in(path):
+            found = [track(f, f.stem) for f in _listdir(d) if is_sub(f) and not is_named_for_video(f)]
+            tracks += sorted(found, key=lambda t: (t.lang or "~", t.forced, t.title.lower()))
+    return _without_copies(tracks)
+
+
+def _only_video_in(path):
+    """No other video next to this one (a film's folder, not a season's)."""
+    others = [f for f in _listdir(path.parent) if names.is_video(f) and f.is_file()
+              and names.without_partial(f) != path and "sample" not in f.name.lower()]
+    return not others
+
+
+def _without_copies(tracks):
+    """One track per subtitle file content: a release often puts the forced
+    track both next to the video ("movie.srt") and in Subs ("Forced.eng.srt");
+    the copy whose name says more stays."""
+    def says(t):
+        return (bool(t.lang), t.forced, bool(t.title))
+    keep = []
+    for t in tracks:
+        try:
+            size = t.file.stat().st_size
+        except OSError:
+            continue
+        twin = next((k for k in keep if k.file.stat().st_size == size and size > 0
+                     and k.file.read_bytes() == t.file.read_bytes()), None)
+        if twin is None:
+            keep.append(t)
+        elif says(t) > says(twin):
+            keep[keep.index(twin)] = t
+    return keep
 
 
 def build_ffmpeg_cmd(media, audio, sub, outdir, stereo=False, quality=65, sub_delay=0.0):

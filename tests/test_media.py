@@ -414,10 +414,10 @@ class SidecarTest(TempDirMixin, unittest.TestCase):
         for n in ("movie.srt", "movie.en.srt", "movie.sv.forced.ass", "movie.vtt",
                   "movie.nfo", "other.srt"):
             (d / n).write_text("")
-        got = {(t.file.name, t.lang, t.codec) for t in media.find_sidecar_subs(video)}
-        self.assertEqual(got, {("movie.srt", "", "subrip"), ("movie.en.srt", "en", "subrip"),
-                               ("movie.sv.forced.ass", "sv.forced", "ass"),
-                               ("movie.vtt", "", "webvtt")})
+        got = {(t.file.name, t.lang, t.codec, t.forced) for t in media.find_sidecar_subs(video)}
+        self.assertEqual(got, {("movie.srt", "", "subrip", False), ("movie.en.srt", "en", "subrip", False),
+                               ("movie.sv.forced.ass", "sv", "ass", True),
+                               ("movie.vtt", "", "webvtt", False)})
         for t in media.find_sidecar_subs(video):
             self.assertEqual((t.kind, t.index), ("sub", 0))
             self.assertIn(f"file {t.file.name}", t.label())
@@ -432,6 +432,86 @@ class SidecarTest(TempDirMixin, unittest.TestCase):
         self.assertEqual([t.file.name for t in media.find_sidecar_subs(d / "show.s01e1.mkv")],
                          ["show.s01e1.en.srt"])
         self.assertEqual([t.file.name for t in media.find_sidecar_subs(d / "movie.mkv")], [])
+
+    def test_subfolders(self):
+        d = self.make_tempdir()
+        video = d / "show.s01e01.avi"
+        video.write_bytes(b"")
+        for n in ("Eng/show.s01e01.eng.srt", "Rus/show.s01e01.srt", "Rus/show.s01e02.srt",
+                  "Subs/show.s01e01.srt", "Subs/show.s01e01/2_English.srt",
+                  "Subs/show.s01e01/notes.txt", "Subs/show.s01e02/2_English.srt",
+                  ".hidden/show.s01e01.srt"):
+            (d / n).parent.mkdir(parents=True, exist_ok=True)
+            (d / n).write_text("")
+        got = [(str(t.file.relative_to(d)), t.lang, t.title) for t in media.find_sidecar_subs(video)]
+        self.assertEqual(got, [("Eng/show.s01e01.eng.srt", "en", ""),
+                               ("Rus/show.s01e01.srt", "ru", ""),
+                               ("Subs/show.s01e01.srt", "", ""),
+                               ("Subs/show.s01e01/2_English.srt", "en", "")])
+
+    def test_film_subs_folder_named_by_language(self):
+        # A YTS-style release: the forced track next to the film, the rest in
+        # "Subs" named by language alone, the forced one again as a copy.
+        d = self.make_tempdir()
+        (d / "movie.mp4").write_bytes(b"")
+        files = {"movie.srt": "forced", "Subs/English.srt": "en", "Subs/Forced.eng.srt": "forced",
+                 "Subs/SDH.eng.srt": "sdh", "Subs/swe.srt": "sv", "Subs/Canadian.fre.srt": "fr",
+                 "Subs/dut.srt": "nl", "Subs/notes.txt": "x"}
+        for n, text in files.items():
+            (d / n).parent.mkdir(parents=True, exist_ok=True)
+            (d / n).write_text(text)
+        got = [(str(t.file.relative_to(d)), t.lang, t.title, t.forced)
+               for t in media.find_sidecar_subs(d / "movie.mp4")]
+        self.assertEqual(got, [("Subs/Forced.eng.srt", "en", "", True),     # the copy next to it says less
+                               ("Subs/English.srt", "en", "", False),
+                               ("Subs/SDH.eng.srt", "en", "SDH", False),
+                               ("Subs/Canadian.fre.srt", "fr", "Canadian", False),
+                               ("Subs/dut.srt", "nl", "", False),
+                               ("Subs/swe.srt", "sv", "", False)])
+
+    def test_season_subs_folder_not_guessed(self):
+        # With several videos, "Subs/English.srt" could belong to any of them.
+        d = self.make_tempdir()
+        for n in ("show.s01e01.mkv", "show.s01e02.mkv", "Subs/English.srt"):
+            (d / n).parent.mkdir(parents=True, exist_ok=True)
+            (d / n).write_text("x")
+        self.assertEqual(media.find_sidecar_subs(d / "show.s01e01.mkv"), [])
+
+    def test_parse_sub_name(self):
+        self.assertEqual(media.parse_sub_name("SDH.eng"), ("en", "SDH", False))
+        self.assertEqual(media.parse_sub_name("Forced.eng"), ("en", "", True))
+        self.assertEqual(media.parse_sub_name("2_English"), ("en", "", False))
+        self.assertEqual(media.parse_sub_name("European.por"), ("pt", "European", False))
+        self.assertEqual(media.parse_sub_name("Commentary"), ("", "Commentary", False))
+        self.assertEqual(media.parse_sub_name("", "rus"), ("ru", "", False))
+
+    def test_download_in_progress_matches_finished_name(self):
+        d = self.make_tempdir()
+        for n in ("movie.mkv.part", "movie.en.srt", "movie2.srt"):
+            (d / n).write_text("")
+        self.assertEqual([t.file.name for t in media.find_sidecar_subs(d / "movie.mkv.part")],
+                         ["movie.en.srt"])
+
+
+class PartialDownloadTest(TempDirMixin, unittest.TestCase):
+    def test_path_follows_rename(self):
+        d = self.make_tempdir()
+        m = make_media(d, [video_stream(0), audio_stream(1)], name="movie.mkv.part")
+        fingerprint = m.fingerprint
+        self.assertEqual(m.path, d / "movie.mkv.part")
+        (d / "movie.mkv.part").rename(d / "movie.mkv")
+        self.assertEqual(m.path, d / "movie.mkv")
+        self.assertEqual(m.fingerprint, fingerprint)
+        self.assertIn(str(d / "movie.mkv"), build_ffmpeg_cmd(m, m.audio[0], None, d))
+
+    def test_still_downloading_or_moved_elsewhere(self):
+        d = self.make_tempdir()
+        m = make_media(d, [video_stream(0), audio_stream(1)], name="movie.mkv.part")
+        (d / "movie.mkv").write_bytes(b"")       # .part still there: keep reading it
+        self.assertEqual(m.path, d / "movie.mkv.part")
+        (d / "movie.mkv").unlink()
+        (d / "movie.mkv.part").unlink()
+        self.assertEqual(m.path, d / "movie.mkv.part")
 
 
 FAKE_FFMPEG = r'''

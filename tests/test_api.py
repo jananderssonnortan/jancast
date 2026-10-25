@@ -495,9 +495,11 @@ class ThumbsAndNextTest(ApiTest):
             self.request("GET", "/api/probe?path=" + str(b.path))
             self.request("GET", "/api/probe?path=" + str(a.path))
             names = [e["name"] for e in self.request("GET", "/api/recent")[1]["items"]]
-            self.assertEqual(names[:2], ["a.mkv", "b.mkv"])
-            # Opening again keeps the saved position and tracks.
-            entry = self.request("GET", "/api/recent")[1]["items"][0]
+            self.assertEqual(names[:2], ["b.mkv", "a.mkv"])
+            # b is new, so it goes on top; a was already listed and keeps its
+            # place (Recents moves on playing, not on opening), and its saved
+            # position and tracks.
+            entry = next(e for e in self.request("GET", "/api/recent")[1]["items"] if e["name"] == "a.mkv")
             self.assertEqual((entry["resume_position"], entry["audio"]), (600, 2))
             self.assertEqual((entry["name_info"]["title"], entry["name_info"]["kind"]), ("A", "movie"))
             # Poster lookups (make=0) neither reorder Recents nor start ffmpeg.
@@ -507,15 +509,39 @@ class ThumbsAndNextTest(ApiTest):
             self.assertEqual((status, info["count"], info["done"]), (200, 0, False))
             self.assertEqual(self.controller.thumbs.jobs, {})
             names = [e["name"] for e in self.request("GET", "/api/recent")[1]["items"]]
-            self.assertEqual(names[:2], ["a.mkv", "b.mkv"])
+            self.assertEqual(names[:2], ["b.mkv", "a.mkv"])
             # remember=0 probes don't either.
             self.request("GET", "/api/probe?remember=0&path=" + str(b.path))
             names = [e["name"] for e in self.request("GET", "/api/recent")[1]["items"]]
-            self.assertEqual(names[:2], ["a.mkv", "b.mkv"])
+            self.assertEqual(names[:2], ["b.mkv", "a.mkv"])
 
     def test_thumbs_unknown_file(self):
         status, body = self.request("GET", "/api/thumbs?path=/nonexistent.mkv")
         self.assertEqual(status, 400)
+
+    def test_download_completes(self):
+        d = self.make_tempdir()
+        part = make_media(d, [video_stream(0), audio_stream(1)], name="Show.S01E01.mkv.part")
+        old = str(part.path)
+        self.controller.thumbs = self.store()
+        with mock.patch.object(api, "probe", return_value=part):
+            self.request("GET", "/api/probe?path=" + old)
+        api.history.record(old, position=600, duration=1200, audio=1, subtitle=0, device_id="X")
+        (d / "Show.S01E01.mkv.part").write_bytes(b"x" * 2000)      # still downloading
+        self.assertEqual(api.history.resume_info(old)["resume_position"], 600)
+
+        (d / "Show.S01E01.mkv.part").rename(d / "Show.S01E01.mkv")
+        new = str(d / "Show.S01E01.mkv")
+        # The finished file keeps the probe (thumbnails, subtitles) without probing again ...
+        with mock.patch.object(api, "probe", side_effect=AssertionError("probed again")):
+            status, body = self.request("GET", "/api/probe?path=" + new)
+            self.assertEqual((status, body["path"], body["name"]), (200, new, "Show.S01E01.mkv"))
+            self.assertIs(self.controller._media(old), self.controller._media(new))
+        # ... and its place in Recents, under the new name.
+        self.assertEqual(body["resume"]["resume_position"], 600)
+        items = self.request("GET", "/api/recent")[1]["items"]
+        self.assertEqual([e["path"] for e in items if e["path"].startswith(str(d))], [new])
+        self.assertEqual(api.history.resume_info(old)["path"], new)
 
 
 class LocalPlayerApiTest(ApiTest):

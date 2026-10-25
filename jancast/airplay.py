@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import time
 from pathlib import Path
 
 import pyatv
@@ -53,6 +54,7 @@ def _init_and_remember(self, rtsp, stream_protocol):
 STARTUP_GRACE_S = 30     # how long the TV may take to start reporting playback
 END_AFTER_MISSES = 5     # reports without media after playback started = it ended
 MAX_STATUS_ERRORS = 10   # consecutive HTTP errors while playing = give up
+LOST_AFTER_SILENCE_S = 8  # no status answer for this long (wall clock), then the connection was lost
 
 
 async def _wait_for_media_to_end(self):
@@ -70,11 +72,20 @@ async def _wait_for_media_to_end(self):
     errors = 0
     loop = asyncio.get_running_loop()
     began = loop.time()
+    answered = time.time()   # wall clock: the monotonic one stands still while the Mac sleeps
     while True:
         try:
             resp = await self.rtsp.connection.get("/playback-info", allow_error=True)
         except (RuntimeError, _player.exceptions.ConnectionLostError):
-            break           # stopped from the TV (e.g. Menu on the remote)
+            # The TV closes the connection when playback is stopped there (Menu
+            # on the remote): the end. After a silence the connection was lost
+            # instead (the Mac slept, the network hung): raise, the session
+            # reconnects.
+            if time.time() - answered > LOST_AFTER_SILENCE_S:
+                raise _player.exceptions.ConnectionLostError(
+                    f"connection was lost (no answer for {time.time() - answered:.0f} s)") from None
+            break
+        answered = time.time()
         parsed = {}
         if resp.code >= 400:
             errors += 1

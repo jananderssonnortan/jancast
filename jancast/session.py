@@ -11,6 +11,8 @@ import time
 import uuid
 from pathlib import Path
 
+from pyatv import exceptions as atv_errors
+
 from . import airplay, history, names, ocrsubs, ondemand
 from .hls_server import HLSServer, directory_bitrate
 from .media import (SEGMENT_SECONDS, Track, Transcoder, audio_plan, build_ffmpeg_cmd,
@@ -25,6 +27,11 @@ SEEK_NEAR_S = 3.0            # a report this close to a seek's target has landed
 SEEK_STALE_S = 10.0          # how long after a seek a report from the old spot is ignored
 HISTORY_EVERY_S = 10         # how often playback progress is saved for resume
 READY_AHEAD_S = 3 * SEGMENT_SECONDS   # prepared video past the start point before playing
+# Lost connection to the TV (Wi-Fi drop, the lid closed): wait this long before
+# each new attempt, then give up. A connection that played this long before it
+# was lost gets the full set of attempts again.
+RECONNECT_DELAYS = (1, 3, 5, 10, 20, 30)
+RECONNECT_RESET_AFTER_S = 60
 # A remux is sent to the TV only once it is complete, so the TV gets a
 # finished (VOD) playlist. Starting on the growing playlist was tried: tvOS 26
 # treats it as a live stream (LIVE badge), never reloads it to see the rest,
@@ -32,6 +39,9 @@ READY_AHEAD_S = 3 * SEGMENT_SECONDS   # prepared video past the start point befo
 # (Re-encodes always start early; they are far slower than realtime remuxes.)
 WAIT_FULL_PREP = os.environ.get("JANCAST_EARLY_START") != "1"
 WORKDIR_PREFIX = "jancast-"
+# What a dropped connection to the TV raises (as opposed to a player error).
+LOST_CONNECTION = (atv_errors.ConnectionLostError, atv_errors.ConnectionFailedError,
+                   ConnectionError, TimeoutError)
 OWNER_FILE = "owner.pid"     # pid of the backend that made a work dir
 
 
@@ -109,6 +119,7 @@ class Session:
         self._grace_until = None        # waits before this are start-up after play/resume
         self._stale_empty_logged = False
         self._history_saved_at = 0.0
+        self._downloading = media.path if media.partial else None   # "movie.mkv.part"
         self._fresh_rtt = None      # (rtt_ms | None) from a probe since the last sample
         self._play_task = None
         self._reposition = None     # seek target while playback restarts there
@@ -280,19 +291,40 @@ class Session:
         """
         if self._remote_task is None and not airplay.is_simulated(self.conf):
             self._remote_task = asyncio.ensure_future(self._connect_remote())
+        attempt = 0
         try:
             while True:
-                self.atv = await self._take_connection()
-                self._play_task = asyncio.ensure_future(
-                    self.atv.stream.play_url(self.stream_url, position=position))
+                began = time.time()
                 try:
-                    await self._play_task
-                except asyncio.CancelledError:
-                    if self._reposition is None or not self._play_task.cancelled():
-                        raise           # a real stop, not our restart for a seek
-                finally:
-                    self.atv.close()
-                    self.atv = None
+                    self.atv = await self._take_connection()
+                    self._play_task = asyncio.ensure_future(
+                        self.atv.stream.play_url(self.stream_url, position=position))
+                    try:
+                        await self._play_task
+                    except asyncio.CancelledError:
+                        if self._reposition is None or not self._play_task.cancelled():
+                            raise           # a real stop, not our restart for a seek
+                    finally:
+                        if self.atv:
+                            self.atv.close()
+                            self.atv = None
+                except LOST_CONNECTION as e:
+                    if time.time() - began > RECONNECT_RESET_AFTER_S:
+                        attempt = 0
+                    if attempt >= len(RECONNECT_DELAYS):
+                        raise
+                    delay = RECONNECT_DELAYS[attempt]
+                    attempt += 1
+                    position = self.playback["position"] if self.playback["position"] is not None else position
+                    message = (f"Connection to the Apple TV lost ({e}); reconnecting in {delay} s "
+                               f"(attempt {attempt} of {len(RECONNECT_DELAYS)}, from {position:.0f} s)")
+                    if self.phase == "connecting":
+                        self.telemetry.event("warn", "app", message)    # each attempt, not only the first
+                    else:
+                        self._set_phase("connecting", "warn", message)
+                    self._renew_remote()
+                    await asyncio.sleep(delay)
+                    continue
                 if self._reposition is None:
                     return
                 position, self._reposition = self._reposition, None
@@ -303,6 +335,16 @@ class Session:
             if self._remote:
                 self._remote.close()
                 self._remote = None
+
+    def _renew_remote(self):
+        """The MediaRemote connection (seek, skip) went down with the TV's: open it again."""
+        if self._remote_task:
+            self._remote_task.cancel()
+        if self._remote:
+            self._remote.close()
+            self._remote = None
+        if not airplay.is_simulated(self.conf):
+            self._remote_task = asyncio.ensure_future(self._connect_remote())
 
     async def _take_connection(self):
         """The connection opened during preparation (once), else a new one."""
@@ -583,6 +625,9 @@ class Session:
     # ---- periodic measurements -------------------------------------------
 
     def _take_sample(self, workdir):
+        if self._downloading and self.media.path != self._downloading:
+            self._downloading = None
+            self.telemetry.event("info", "app", f"Download finished: now reading {self.media.path.name}")
         tc = self.transcoder
         pb = self.playback
         prepared = tc.prepared_s if tc else 0.0

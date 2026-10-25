@@ -5,6 +5,8 @@ import Foundation
 /// pipe open for the lifetime of the app (the backend exits when it closes).
 /// It runs as "Jancast Backend" (a copy of Python's launcher) so Activity
 /// Monitor names it, falling back to plain Python if that copy won't start.
+/// The downloadable app (package-app.sh) brings its own Python, backend,
+/// ffmpeg and OCR helper in Contents/Resources and uses those instead.
 @MainActor
 final class BackendProcess {
     private var process: Process?
@@ -22,6 +24,7 @@ final class BackendProcess {
         if let dir = ProcessInfo.processInfo.environment["JANCAST_BACKEND_DIR"], !dir.isEmpty {
             return URL(fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true)
         }
+        if let res = bundledRuntime { return res }
         // build-app.sh puts the bundle at <project>/build/Jancast.app, so the
         // project (with .venv) is two levels up - this survives moving the folder.
         let bundle = Bundle.main.bundleURL
@@ -35,8 +38,18 @@ final class BackendProcess {
             .appendingPathComponent("development/jancast", isDirectory: true)
     }
 
+    /// Contents/Resources of the self-contained app, or nil for a development build.
+    static var bundledRuntime: URL? {
+        guard let res = Bundle.main.resourceURL,
+              FileManager.default.isExecutableFile(atPath: res.appendingPathComponent("python/bin/python3").path),
+              FileManager.default.fileExists(atPath: res.appendingPathComponent("backend/jancast").path)
+        else { return nil }
+        return res
+    }
+
     func start(timeout: TimeInterval = 30) async throws -> Int {
         let dir = Self.backendDirectory
+        if dir == Self.bundledRuntime { return try await startBundled(dir, timeout: timeout) }
         let python = dir.appendingPathComponent(".venv/bin/python")
         guard FileManager.default.isExecutableFile(atPath: python.path) else {
             throw BackendError.launch(
@@ -53,6 +66,44 @@ final class BackendProcess {
             }
         }
         return try await launch(python, venvPython: nil, dir: dir, timeout: timeout)
+    }
+
+    /// Python, ffmpeg/ffprobe and the OCR helper all from inside the app.
+    private func startBundled(_ res: URL, timeout: TimeInterval) async throws -> Int {
+        Self.clearQuarantine(res)
+        let bin = res.appendingPathComponent("python/bin")
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        let env = [
+            "PYTHONPATH": res.appendingPathComponent("backend").path,
+            "PYTHONDONTWRITEBYTECODE": "1",          // the signed bundle must not change
+            "PATH": res.appendingPathComponent("bin").path + ":" + path,
+            "JANCAST_OCR_HELPER": res.appendingPathComponent("bin/jancast-ocr").path,
+        ]
+        let named = bin.appendingPathComponent("Jancast Backend")
+        if FileManager.default.isExecutableFile(atPath: named.path) {
+            do {
+                return try await launch(named, venvPython: nil, dir: res, extraEnv: env, timeout: timeout)
+            } catch {
+                let log = logTail
+                reset()
+                appendLog(Data("[Jancast Backend launcher failed, using python3: \(error.localizedDescription)]\n\(log)\n".utf8))
+            }
+        }
+        return try await launch(bin.appendingPathComponent("python3"), venvPython: nil, dir: res, extraEnv: env, timeout: timeout)
+    }
+
+    /// A downloaded app keeps macOS's quarantine flag on every file inside. Once
+    /// the user has allowed Jancast itself, clear it from the bundled Python and
+    /// tools too, so starting them isn't blocked separately (best effort: a
+    /// read-only or translocated bundle keeps it).
+    private static func clearQuarantine(_ res: URL) {
+        let python = res.appendingPathComponent("python/bin/python3").resolvingSymlinksInPath().path
+        guard getxattr(python, "com.apple.quarantine", nil, 0, 0, 0) >= 0 else { return }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/xattr")
+        p.arguments = ["-dr", "com.apple.quarantine", res.path]
+        try? p.run()
+        p.waitUntilExit()
     }
 
     private func reset() {
@@ -98,7 +149,8 @@ final class BackendProcess {
         }
     }
 
-    private func launch(_ executable: URL, venvPython: URL?, dir: URL, timeout: TimeInterval) async throws -> Int {
+    private func launch(_ executable: URL, venvPython: URL?, dir: URL, extraEnv: [String: String] = [:],
+                        timeout: TimeInterval) async throws -> Int {
         let p = Process()
         p.executableURL = executable
         p.arguments = ["-m", "jancast", "serve", "--api-port", "0"]
@@ -106,6 +158,7 @@ final class BackendProcess {
         var env = ProcessInfo.processInfo.environment
         env["PYTHONUNBUFFERED"] = "1"
         if let venvPython { env["__PYVENV_LAUNCHER__"] = venvPython.path }
+        env.merge(extraEnv) { _, new in new }
         p.environment = env
 
         let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()

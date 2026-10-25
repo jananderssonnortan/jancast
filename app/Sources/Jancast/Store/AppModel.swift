@@ -34,6 +34,8 @@ final class AppModel {
     /// The remote's natural height, so the Diagnostics drawer can take the
     /// library's space before the remote's (RootView).
     var remoteHeight: CGFloat = 0
+    /// Where the remote starts in the window (below the toolbar), for the backdrop.
+    var remoteTop: CGFloat = 0
     /// The Diagnostics drawer at the bottom of the main window.
     var diagnosticsOpen = false {
         didSet {
@@ -98,8 +100,20 @@ final class AppModel {
     /// The "This Mac" player window (plays the stream locally instead of on a TV).
     @ObservationIgnored private(set) lazy var localPlayer = LocalPlayer(model: self)
 
+    /// Last run's window colours, until this run's pictures load (SavedLook).
+    var launchLook: SavedLook.Pictures?
+    /// Launch is done: the backend runs and the restored file (if any) has its
+    /// pictures. Until then the window shows only its background, so it opens
+    /// complete instead of filling in piece by piece.
+    var ready = false
+
     init(mock: Bool) {
         backend = mock ? MockBackend() : LiveBackend()
+        launchLook = mock ? nil : SavedLook.load()
+        if launchLook != nil {
+            // Where last run's backdrop started (under the toolbar), so it is in place from the start.
+            remoteTop = UserDefaults.standard.double(forKey: "lastRemoteTop")
+        }
         AppModel.current = self
     }
 
@@ -150,6 +164,9 @@ final class AppModel {
         if let p = pendingOpenPath { pendingOpenPath = nil; await openFile(path: p) }
         else if !(isMock && ProcessInfo.processInfo.environment["JANCAST_MOCK_AUTOPLAY"] == "1") { await restoreLastSession() }
         else { await loadRecents() }
+        await waitForPictures()
+        ready = true
+        Task { await Updater.shared.checkAtLaunch() }
 
         if isMock, ProcessInfo.processInfo.environment["JANCAST_MOCK_AUTOPLAY"] == "1" {
             await devicesLoaded.value
@@ -159,9 +176,20 @@ final class AppModel {
         }
     }
 
+    /// At launch: the restored file's poster frame (or word that there are no
+    /// pictures) before the window shows, at most `timeout`.
+    private func waitForPictures(timeout: TimeInterval = 1.5) async {
+        guard probe != nil else { return }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, heroPoster == nil, !thumbs.paletteUnavailable {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
     func shutdown() {
         pollTask?.cancel()
         backend.shutdown()
+        if !isMock { saveLook() }
     }
 
     static let sampleMoviePath = "/Users/Shared/Movies/Night.Train.S01E03.1080p.WEB-DL.mkv"
@@ -207,6 +235,7 @@ final class AppModel {
         trimmed.events = []
         live = trimmed
         reconcileOptimisticPosition()
+        followCompletedDownload(r)
         trackTransitions(r)
         ensureSessionProbe(r)
         followThumbnails()
@@ -223,8 +252,24 @@ final class AppModel {
         }
     }
 
+    /// The loaded file was a download in progress and the backend now plays it
+    /// under its finished name ("movie.mkv.part" → "movie.mkv"): the same file,
+    /// so Setup follows the rename instead of treating it as another one.
+    private func followCompletedDownload(_ r: StateResponse) {
+        guard var p = probe, p.downloading == true, let file = r.session?.file, let path = file.path,
+              path != p.path, path == (p.path as NSString).deletingPathExtension else { return }
+        p.path = path
+        p.name = file.name ?? p.name
+        p.nameInfo = file.nameInfo ?? p.nameInfo
+        p.downloading = false
+        probe = p
+        UserDefaults.standard.set(path, forKey: "lastFilePath")
+        Task { await loadRecents() }
+    }
+
     private func trackTransitions(_ r: StateResponse) {
         let ph = Phase(r.phase)
+        SleepGuard.shared.update(streaming: ph.isActive && ph != .paused && r.session != nil)
         if let pending = pendingDeviceID, r.session?.device?.id == pending || !ph.isActive {
             pendingDeviceID = nil
         }
@@ -362,7 +407,10 @@ final class AppModel {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         var types: [UTType] = [.movie, .video, .mpeg4Movie, .quickTimeMovie]
-        for ext in ["mkv", "m2ts", "ts", "avi", "webm"] { if let t = UTType(filenameExtension: ext) { types.append(t) } }
+        // Downloads in progress ("movie.mkv.part") play too.
+        for ext in ["mkv", "m2ts", "ts", "avi", "webm", "part", "!qB", "!ut", "crdownload"] {
+            if let t = UTType(filenameExtension: ext) { types.append(t) }
+        }
         panel.allowedContentTypes = types
         // Leave the player only once a file is chosen (Cancel keeps it).
         if panel.runModal() == .OK, let url = panel.url {
@@ -372,12 +420,11 @@ final class AppModel {
     }
 
     /// - history: entry from Recents (used if the probe doesn't carry `resume`).
-    /// - offerResume: false for "Start Over" — tracks/device are still restored.
+    /// - offerResume: false for "Start Over" — tracks are still restored.
     func openFile(path: String, history: HistoryEntry? = nil, offerResume: Bool = true) async {
         probing = true
         probeError = nil
         upNextAfter = nil
-        historyDeviceID = nil
         defer { probing = false }
         do {
             let p = try await backend.probe(path: path)
@@ -392,7 +439,7 @@ final class AppModel {
             if let h = p.resume ?? history { applyHistory(h, offerResume: offerResume) }
             followOCR()
             followThumbnails()
-            await loadRecents()      // opened files are listed in Recents too
+            await loadRecents()      // opened files are listed in Recents too (listed ones keep their place)
         } catch {
             probe = nil
             probeError = "Could not read “\((path as NSString).lastPathComponent)”: \(error.localizedDescription)"
@@ -406,34 +453,45 @@ final class AppModel {
         if backendStatus == .running { Task { await openFile(path: path) } } else { pendingOpenPath = path }
     }
 
-    /// Restores tracks, stereo and device from a history entry.
+    /// Restores tracks and stereo from a history entry. Not the TV: the one
+    /// picked in the toolbar is where everything plays.
     private func applyHistory(_ h: HistoryEntry, offerResume: Bool) {
         guard let p = probe else { return }
         if let a = h.audio, p.audioTracks.contains(where: { $0.id == a }) { audioID = a }
         if let sub = h.subtitle, sub == 0 || p.subtitleTracks.contains(where: { $0.id == sub }) { subtitleID = sub }
         stereo = h.stereo ?? false
         subtitleDelay = h.subtitleDelay ?? 0
-        historyDeviceID = h.deviceId
-        selectHistoryDevice()
         resumeEntry = (offerResume && h.resumePosition != nil) ? h : nil
-    }
-
-    /// The TV a file last played on; selected once it shows up in the device
-    /// list (at launch the list is still being scanned when the file is restored).
-    @ObservationIgnored private var historyDeviceID: String?
-
-    private func selectHistoryDevice() {
-        guard let id = historyDeviceID, let d = devices.first(where: { $0.id == id }), d.reachability != .offline else { return }
-        selectedDeviceID = id
-        userPickedDevice = true
-        historyDeviceID = nil
     }
 
     func loadRecents() async {
         do {
-            recents = try await backend.recent(limit: 20).items ?? []
+            let fresh = try await backend.recent(limit: 20).items ?? []
+            // Rows keep the order they had while the app runs (what was played
+            // moves up at the next launch); files new to the list go on top.
+            let known = recents.map(\.path)
+            let byPath = Dictionary(fresh.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+            recents = fresh.filter { !known.contains($0.path) } + known.compactMap { byPath[$0] }
         } catch {
             recents = []      // older backend without /api/recent: just no list
+        }
+        followLastPlayed()
+    }
+
+    /// The file played most recently (not only opened).
+    var lastPlayed: HistoryEntry? {
+        recents.filter { ($0.position ?? 0) > 0 || $0.watched == true }.max { ($0.updatedAt ?? 0) < ($1.updatedAt ?? 0) }
+    }
+    /// Its probe, for its next episode: read quietly, not listed as opened.
+    var lastPlayedProbe: ProbeResult?
+    @ObservationIgnored private var lastPlayedProbePath: String?
+
+    private func followLastPlayed() {
+        guard let path = lastPlayed?.path, path != lastPlayedProbePath else { return }
+        lastPlayedProbePath = path
+        Task {
+            let p = try? await backend.peek(path: path)
+            if lastPlayedProbePath == path { lastPlayedProbe = p }
         }
     }
 
@@ -446,6 +504,7 @@ final class AppModel {
                   FileManager.default.fileExists(atPath: last) {
             await openFile(path: last)
         }
+        if probe == nil { launchLook = nil }        // nothing restored: no colours to keep
     }
 
     /// After a stop/finish the saved position changed: refresh Recents and the offer.
@@ -457,6 +516,7 @@ final class AppModel {
     }
 
     func closeFile() {
+        launchLook = nil
         probe = nil
         probeError = nil
         upNextAfter = nil
@@ -477,7 +537,6 @@ final class AppModel {
             let fresh = r.devices ?? []
             devices = query == .probe ? Self.stableMerge(old: devices, new: fresh) : fresh
             devicesError = nil
-            selectHistoryDevice()
             autoSelectDevice()
         } catch {
             if query != .probe { devicesError = error.localizedDescription }
@@ -498,25 +557,30 @@ final class AppModel {
 
     @ObservationIgnored private var userPickedDevice = false
 
+    /// The TV picked in the toolbar: used for every file, and kept for the next launch.
     func selectDevice(_ id: String) {
         guard let d = devices.first(where: { $0.id == id }), d.reachability != .offline else { return }
         selectedDeviceID = id
         userPickedDevice = true
-        historyDeviceID = nil
+        UserDefaults.standard.set(id, forKey: Self.pickedDeviceKey)
     }
+
+    private static let pickedDeviceKey = "pickedDeviceID"
 
     private func autoSelectDevice() {
         if let cur = selectedDevice, cur.reachability != .offline, userPickedDevice || cur.lastUsed == true || cur.reachability == .online {
             return
         }
         let online = devices.filter { $0.reachability == .online }
-        let pick = online.first { $0.lastUsed == true }
+        let picked = UserDefaults.standard.string(forKey: Self.pickedDeviceKey)
+        let pick = online.first { $0.id == picked }
+            ?? online.first { $0.lastUsed == true }
             ?? online.first { !$0.needsPairing }
             ?? online.first
-            ?? devices.first { $0.reachability == .notResponding && $0.lastUsed == true }
+            ?? devices.first { $0.reachability == .notResponding && ($0.id == picked || $0.lastUsed == true) }
         if let pick, pick.id != selectedDeviceID {
             selectedDeviceID = pick.id
-            userPickedDevice = false
+            userPickedDevice = pick.id == picked
         } else if pick == nil, selectedDevice?.reachability == .offline {
             selectedDeviceID = nil
         }
@@ -583,6 +647,7 @@ final class AppModel {
         if switchAfterPairing != nil {
             switchAfterPairing = nil
             selectedDeviceID = live?.session?.device?.id ?? selectedDeviceID   // still playing where it was
+            if let id = selectedDeviceID { UserDefaults.standard.set(id, forKey: Self.pickedDeviceKey) }
         }
     }
 
@@ -727,6 +792,14 @@ final class AppModel {
 
     /// Main window is key (kept up to date by AppDelegate).
     var mainWindowIsKey = false
+    /// Which control Tab has moved to (KeyFocus.swift); the library by default.
+    var keyFocus: KeyFocus = .library
+    /// The focusable controls on screen and what Return / Space do on them.
+    @ObservationIgnored var keyActions: [KeyFocus: KeyFocusAction] = [:]
+    /// The This Mac window is key (kept up to date by AppDelegate).
+    var playerWindowIsKey = false
+    /// ⌘← / ⌘→ skip only where the playing picture is what the user looks at.
+    var skipKeysApply: Bool { playerHasKeyFocus || playerWindowIsKey }
     /// Plain ← / → skip only when the player is what the user is looking at.
     /// Not while the Diagnostics drawer is open: its tables need the arrow keys
     /// (the key monitor in AppDelegate still skips when no table has focus).
@@ -858,6 +931,10 @@ final class AppModel {
     /// the Mac's own volume, so there it only says so.
     func changeTVVolume(up: Bool) {
         guard canControl else { return }
+        // A held ⌘↑ repeats ~20× a second: one step per 0.15 s, so the volume
+        // doesn't keep changing after the key is let go.
+        guard Date().timeIntervalSince(lastVolumeStepAt) >= 0.15 else { return }
+        lastVolumeStepAt = Date()
         guard playsOnAppleTV else {
             showVolumeHint("This Mac uses the Mac’s volume")
             return
@@ -868,6 +945,8 @@ final class AppModel {
             if r?.ok != true { showVolumeHint(r?.error.map { "No TV volume: \($0)" } ?? "No TV volume") }
         }
     }
+
+    @ObservationIgnored private var lastVolumeStepAt = Date.distantPast
 
     private func showVolumeHint(_ text: String) {
         volumeHint = text
@@ -934,6 +1013,107 @@ final class AppModel {
 
     /// Double-click in the playlist: open and start right away — at the saved
     /// position, on the TV it last played on (if it is reachable).
+    // MARK: - Library (keyboard)
+
+    /// What is playing, if anything (also while another file is on screen).
+    var nowPlayingPath: String? {
+        guard hasSession, phase.isActive else { return nil }
+        return live?.session?.file?.path
+    }
+
+    /// The library's Up Next: the next episode of what is playing, else of
+    /// what was played last. Not of the file clicked or arrowed to: the list
+    /// would change under the user while browsing.
+    var libraryNext: NextEpisode? {
+        if nowPlayingPath != nil { return upNext }
+        guard let last = lastPlayed?.path else { return nil }
+        if probe?.path == last { return probe?.next }
+        return lastPlayedProbe?.path == last ? lastPlayedProbe?.next : nil
+    }
+
+    /// Recent, what plays included (in its place). The suggestion stays in its
+    /// row too if it is listed; it only gets a row below when it isn't, so
+    /// starting something never moves a file out of the list.
+    var libraryRecents: [HistoryEntry] { Array(recents.prefix(10)) }
+
+    /// The suggestion's own row at the bottom: only for an episode not listed.
+    var librarySuggestion: NextEpisode? {
+        guard let next = libraryNext, next.path != nowPlayingPath,
+              !libraryRecents.contains(where: { $0.path == next.path }) else { return nil }
+        return next
+    }
+
+    /// ↑ / ↓ go to the library: the main window has the keys, no sheet, and
+    /// the Diagnostics drawer (whose tables use the arrows) is closed.
+    var libraryHasKeyFocus: Bool {
+        mainWindowIsKey && backendStatus == .running && pairingDeviceID == nil && !diagnosticsOpen && keyFocus == .library
+    }
+
+    /// The row ↑ / ↓ moved to while its file is still being read.
+    var libraryCursor: String?
+    @ObservationIgnored private var libraryMoveSeq = 0
+
+    /// ↑ / ↓: the next or previous row in the library, as on screen (Recent,
+    /// then Suggested), also while something plays. A file is loaded as a click
+    /// would (playback carries on); the playing row brings the player back. A
+    /// held key steps through without reading every file on the way.
+    func moveLibrarySelection(by step: Int) {
+        moveLibrarySelection { i, count in i.map { $0 + step } ?? (step > 0 ? 0 : count - 1) }
+    }
+
+    /// Rows Page Up / Page Down move.
+    static let libraryPage = 5
+
+    /// ⌥↑ / ⌥↓, Home / End: the first or last row.
+    func moveLibrarySelection(toLast: Bool) {
+        moveLibrarySelection { _, count in toLast ? count - 1 : 0 }
+    }
+
+    /// target: the row to go to, from the current one (nil: none) and the row count.
+    private func moveLibrarySelection(_ target: (Int?, Int) -> Int) {
+        var order = libraryRecents.map(\.path)
+        if let playing = nowPlayingPath, !order.contains(playing) { order.insert(playing, at: 0) }
+        if let next = librarySuggestion { order.append(next.path) }
+        guard !order.isEmpty else { return }
+        let current = libraryCursor ?? (showsPlayer ? nowPlayingPath : probe?.path)
+        let i = current.flatMap { order.firstIndex(of: $0) }
+        let j = max(0, min(order.count - 1, target(i, order.count)))
+        let path = order[j]
+        guard path != current else { return }
+        if path == nowPlayingPath {
+            libraryMoveSeq += 1
+            libraryCursor = nil
+            playerVisible = true
+            return
+        }
+        libraryCursor = path
+        libraryMoveSeq += 1
+        let seq = libraryMoveSeq
+        Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            guard seq == libraryMoveSeq else { return }
+            playerVisible = false
+            await openFile(path: path, history: recents.first { $0.path == path })
+            if seq == libraryMoveSeq { libraryCursor = nil }
+        }
+    }
+
+    /// Enter on the ready screen: play what is selected (resumed), also when
+    /// ↑ / ↓ just moved there and it is still being read.
+    func playLibrarySelection() {
+        if let path = libraryCursor {
+            libraryMoveSeq += 1
+            libraryCursor = nil
+            if let e = recents.first(where: { $0.path == path }) { playNow(e); return }
+            Task {
+                await openFile(path: path)
+                if probe?.path == path { play(startPosition: resumeEntry?.resumePosition) }
+            }
+        } else if canPlay {
+            play(startPosition: resumeEntry?.resumePosition)
+        }
+    }
+
     func playNow(_ entry: HistoryEntry) {
         Task {
             await openFile(path: entry.path, history: entry)
@@ -1018,6 +1198,7 @@ final class AppModel {
               let d = devices.first(where: { $0.id == id }), d.reachability != .offline else { return }
         selectedDeviceID = id
         userPickedDevice = true
+        UserDefaults.standard.set(id, forKey: Self.pickedDeviceKey)
         if d.needsPairing {
             switchAfterPairing = id         // submitPin moves playback once paired
             startPairing(deviceID: id)

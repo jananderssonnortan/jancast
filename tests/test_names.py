@@ -1,6 +1,7 @@
 """names.py: what a file is, from real-world style file and folder names."""
 
 import unittest
+from pathlib import Path
 
 from jancast import names
 
@@ -156,6 +157,16 @@ class ParseTest(unittest.TestCase):
     def test_fallback_to_the_file_name(self):
         self.assertEqual(names.parse("/x/[only a tag].mkv")["title"], "[only a tag]")
         self.assertEqual(names.parse("weird_name.mkv")["title"], "Weird Name")
+
+    def test_download_in_progress(self):
+        got = names.parse("/dl/Star City (2026) - S01E01 - The Eyes (1080p ATV WEB-DL x265).mkv.part")
+        self.assertEqual((got["show"], got["season"], got["episode"]), ("Star City", 1, 1))
+        for n in ("a.mkv.part", "a.mp4.!qB", "a.avi.crdownload"):
+            self.assertTrue(names.is_partial(n), n)
+            self.assertTrue(names.is_video(n), n)
+        for n in ("a.part", "Part.mkv", "a.zip.part", "a.mkv"):
+            self.assertFalse(names.is_partial(n), n)
+        self.assertEqual(names.without_partial("/dl/a.mkv.part"), Path("/dl/a.mkv"))
 
     def test_show_key(self):
         a = names.parse("The.Office.US.S05E14.mkv")

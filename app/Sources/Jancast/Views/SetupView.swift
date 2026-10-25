@@ -39,7 +39,7 @@ struct ReadyRemote: View {
                 // Click or drag to start playing right there.
                 Filmstrip(duration: duration, position: resume ?? 0,
                           interactive: model.canPlay) { model.play(startPosition: $0) }
-                HStack {
+                HStack(spacing: 4) {
                     Text(resume.map { "Stopped at \(Fmt.clock($0))" } ?? "Not started")
                     if let at = model.resumeEntry?.updatedAt { Text("· " + Fmt.ago(at)) }
                     Spacer()
@@ -93,17 +93,7 @@ struct DevicePicker: View {
         let d = model.selectedDevice
         HStack(spacing: 7) {
             Menu {
-                Picker("Apple TV", selection: Binding(get: { model.selectedDeviceID ?? "" }, set: { model.selectDevice($0) })) {
-                    ForEach(model.devices) { d in Text(deviceTitle(d)).tag(d.id) }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-                if model.devices.isEmpty {
-                    Text(model.scanning ? "Looking for Apple TVs…" : "No Apple TVs found")
-                }
-                Divider()
-                Button("Scan for Apple TVs") { Task { await model.loadDevices(.refresh) } }
-                    .disabled(model.scanning)
+                DevicePickerItems()
             } label: {
                 Label(d?.displayName ?? (model.scanning ? "Looking…" : "Choose Apple TV"), systemImage: "airplayvideo")
             }
@@ -112,6 +102,7 @@ struct DevicePicker: View {
             StatusDot(color: dotColor(d))
         }
         .help(d.map(hint) ?? "The Apple TV to play on")
+        .keyFocus(.device, radius: 8) { DevicePickerItems() }
     }
 
     private func dotColor(_ d: Device?) -> Color {
@@ -128,6 +119,26 @@ struct DevicePicker: View {
         case .notResponding: return "Not responding; Play will try to wake it"
         case .offline: return "Offline"
         }
+    }
+
+}
+
+/// The device menu's items, for the toolbar menu and for its keyboard menu.
+private struct DevicePickerItems: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        Picker("Apple TV", selection: Binding(get: { model.selectedDeviceID ?? "" }, set: { model.selectDevice($0) })) {
+            ForEach(model.devices) { d in Text(deviceTitle(d)).tag(d.id) }
+        }
+        .pickerStyle(.inline)
+        .labelsHidden()
+        if model.devices.isEmpty {
+            Text(model.scanning ? "Looking for Apple TVs…" : "No Apple TVs found")
+        }
+        Divider()
+        Button("Scan for Apple TVs") { Task { await model.loadDevices(.refresh) } }
+            .disabled(model.scanning)
     }
 
     private func deviceTitle(_ d: Device) -> String {
@@ -152,17 +163,31 @@ private struct PlayButtons: View {
     var body: some View {
         let pair = model.selectedDevice?.needsPairing == true
         VStack(spacing: 8) {
+            // The main button stays centred and Start Over sits to its left:
+            // centring the pair moved Play sideways when stepping between a
+            // file with a resume point and one without.
             HStack(spacing: 12) {
+                // Not a Group: an empty one has no frame, and Play went left.
+                ZStack(alignment: .trailing) {
+                    Color.clear.frame(height: 0)
+                    if resume != nil {
+                        Button("Start Over") { model.play() }
+                            .controlSize(.large)
+                            .buttonBorderShape(.capsule)
+                            .foregroundStyle(.primary)
+                            .help("Play from the beginning")
+                            .keyFocus(.startOver, radius: 100) { if model.canPlay { model.play() } }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
                 if let resume {
-                    Button("Start Over") { model.play() }
-                        .controlSize(.large)
-                        .help("Play from the beginning")
                     primary("\(pair ? "Pair & Resume" : "Resume") \(Fmt.clock(resume))") { model.play(startPosition: resume) }
                         .help("Continue where you left off (⌘↩)")
                 } else {
                     primary(pair ? "Pair & Play" : "Play") { model.play() }
                         .help("Start streaming (⌘↩)")
                 }
+                Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
             }
             .disabled(!model.canPlay)
             .frame(minHeight: 76)
@@ -188,6 +213,7 @@ private struct PlayButtons: View {
         .buttonBorderShape(.capsule)
         .controlSize(.large)
         .keyboardShortcut(.defaultAction)
+        .keyFocus(.play, radius: 100) { if model.canPlay { action() } }
     }
 
     /// Only when something about the TV needs saying.
@@ -216,22 +242,35 @@ private struct ChoiceTiles: View {
         HStack(spacing: 8) {
             MenuTile(caption: "AUDIO",
                      value: audio.map { TrackLabel.audio($0, in: probe.audioTracks, stereo: model.stereo) } ?? "Audio") {
-                Picker("Audio", selection: $model.audioID) {
-                    ForEach(probe.audioTracks) { t in Text(Fmt.trackTitle(t) + (t.mode == "transcode" ? " · converted" : "")).tag(t.id) }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-                Divider()
-                Toggle("Downmix to Stereo", isOn: $model.stereo)
+                AudioMenuContent(probe: probe)
             }
             .help(audio.map { Fmt.trackTitle($0) + (model.stereo ? " · stereo downmix" : "") } ?? "Audio track")
+            .keyFocus(.audio, radius: 12) { AudioMenuContent(probe: probe) }
             MenuTile(caption: "SUBTITLES",
                      value: subtitle.map { TrackLabel.subtitle($0, in: probe.subtitleTracks)
                          + SubtitleMenuContent.labelSuffix(model.subtitleDelay) } ?? "Off") {
                 SubtitleMenuContent(probe: probe, inPlayer: false)
             }
             .help(subtitle.map(Fmt.trackTitle) ?? "Subtitles off")
+            .keyFocus(.subtitles, radius: 12) { SubtitleMenuContent(probe: probe, inPlayer: false) }
         }
+    }
+}
+
+/// The audio menu's items, for the tile and for its keyboard menu.
+private struct AudioMenuContent: View {
+    @Environment(AppModel.self) private var model
+    let probe: ProbeResult
+
+    var body: some View {
+        @Bindable var model = model
+        Picker("Audio", selection: $model.audioID) {
+            ForEach(probe.audioTracks) { t in Text(Fmt.trackTitle(t) + (t.mode == "transcode" ? " · converted" : "")).tag(t.id) }
+        }
+        .pickerStyle(.inline)
+        .labelsHidden()
+        Divider()
+        Toggle("Downmix to Stereo", isOn: $model.stereo)
     }
 }
 
@@ -274,6 +313,10 @@ private struct Notes: View {
         if let s = model.selectedSubtitle, s.burnsIn {
             return ("cpu", .orange, "Subtitles are burned in — video will be re-encoded",
                     "\(Fmt.codec(s.codec)) subtitles are pictures, not text, so they are painted into the video. That means re-encoding the whole picture: heavy CPU use and slightly lower quality. Pick a text track (SRT/ASS) if there is one.")
+        }
+        if probe.downloading == true {
+            return ("arrow.down.circle", .secondary, "Still downloading",
+                    "This file is a download in progress. It plays anyway: parts that haven’t arrived yet show as a short glitch. When the download finishes, Jancast switches to the finished file by itself, also in the middle of playback.")
         }
         if model.stereo {
             return ("arrow.triangle.2.circlepath", .secondary, "Audio mixed down to stereo",

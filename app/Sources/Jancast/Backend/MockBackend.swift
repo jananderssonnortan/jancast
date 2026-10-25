@@ -96,6 +96,8 @@ final class MockBackend: Backend {
 
     // MARK: - Setup endpoints
 
+    func peek(path: String) async throws -> ProbeResult { try await probe(path: path) }
+
     func probe(path: String) async throws -> ProbeResult {
         try? await Task.sleep(nanoseconds: 450_000_000)
         let name = (path as NSString).lastPathComponent

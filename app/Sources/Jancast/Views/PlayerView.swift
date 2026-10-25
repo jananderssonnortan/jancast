@@ -86,7 +86,7 @@ struct StatusLine: View {
         let failingNow = (status == .failing || status == .failed) && model.phase != .failed
         Group {
             if let hint = model.volumeHint {
-                Label(hint, systemImage: "speaker.wave.2.fill")      // brief, after ↑ / ↓
+                Label(hint, systemImage: "speaker.wave.2.fill")      // brief, after ⌘↑ / ⌘↓
             } else if failingNow, let h = live?.diagnosis?.headline {
                 // Real trouble is said inline, not hidden in a popover.
                 Label(h, systemImage: "exclamationmark.triangle.fill")
@@ -238,7 +238,7 @@ private struct Transport: View {
     }
 }
 
-/// TV volume: − / + in a small popover (also ↑ / ↓ in the player).
+/// TV volume: − / + in a small popover (also ⌘↑ / ⌘↓).
 private struct VolumeButton: View {
     @Environment(AppModel.self) private var model
     @State private var open = false
@@ -246,12 +246,12 @@ private struct VolumeButton: View {
     var body: some View {
         let usable = model.canControl && model.playsOnAppleTV
         // On This Mac it stays clickable but dimmed: a click says why (the
-        // same hint as ↑ / ↓) instead of doing nothing.
+        // same hint as ⌘↑ / ⌘↓) instead of doing nothing.
         Button {
             if model.playsOnAppleTV { open.toggle() } else { model.changeTVVolume(up: true) }
         } label: { Image(systemName: "speaker.wave.2.fill") }
             .buttonStyle(RoundButtonStyle(size: 34))
-            .help(model.playsOnAppleTV ? "TV volume (↑ / ↓)" : "This Mac uses the Mac’s volume")
+            .help(model.playsOnAppleTV ? "TV volume (⌘↑ / ⌘↓)" : "This Mac uses the Mac’s volume")
             .accessibilityLabel("TV volume")
             .disabled(!model.canControl)
             .opacity(usable ? 1 : 0.5)

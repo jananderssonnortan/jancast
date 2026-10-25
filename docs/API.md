@@ -34,7 +34,7 @@ Files are chosen natively (open panel / drag & drop); the app sends the path.
 ```json
 {
   "path": "...", "name": "night.train.s06e01.mkv", "size_bytes": 3859110437,
-  "duration_s": 3011.4,
+  "downloading": false, "duration_s": 3011.4,
   "name_info": {"title": "Night Train S6 · E1", "show": "Night Train", "season": 6,
                 "episode": 1, "episode_end": null, "episode_title": null, "year": null,
                 "kind": "episode"},
@@ -59,6 +59,13 @@ Files are chosen natively (open panel / drag & drop); the app sends the path.
 }
 ```
 - `video.mode`: `"copy"` (remux, fast) or `"reencode"` (with `reason`, e.g. `"AV1 not supported by Apple TV"`).
+- `external` subtitles are files: `movie.srt` / `movie.en.srt` next to the video
+  or in a subfolder (a 2–3 letter folder name gives the language), any file in
+  `Subs/movie/`, and, when the video is alone in its folder, every file in a
+  `Subs` / `Subtitles` folder named by language only (`English.srt`,
+  `SDH.eng.srt`, `Forced.eng.srt`). Language (2-letter where one exists),
+  title ("SDH", "Canadian") and forced come from the name; exact copies are
+  listed once.
 - audio `mode`: `"copy"` or `"transcode"`.
 - subtitle `mode`: `"soft"` (text, toggleable), `"ocr"` (picture subtitles, PGS, shown as text:
   recognised with macOS Vision on first use, ~10 s per film, then cached — no re-encode) or
@@ -67,8 +74,15 @@ Files are chosen natively (open panel / drag & drop); the app sends the path.
 - `next`: the next episode in the same folder (same show name, see `name_info`;
   the next season's first episode if this was the last), or `null`. Its
   `season` is null for absolute numbering ("Show - 12"). Probing a file also starts making its preview thumbnails and lists it
-  in Recents (as opened, position 0, unless it already has an entry);
+  in Recents (as opened, position 0, at the top; a file already listed keeps
+  its place);
   `&remember=0` skips the Recents part.
+- `downloading`: the file is a download in progress (`movie.mkv.part`, also
+  `.!qB`, `.!ut`, `.crdownload`). It plays anyway; missing pieces show as a
+  short glitch. Once the download client renames it to `movie.mkv`, everything
+  follows the new name: the running session (`session.file`, ffmpeg restarts),
+  the history entry, and a probe of the new path, which keeps the old probe's
+  thumbnails and subtitles. A file moved to another folder is not followed.
 
 ### What a file is (`name_info`)
 Wherever the API names a file (probe, `next`, history entries, `session.file`)
@@ -138,7 +152,8 @@ A history entry:
 ```
 - `resume_position`: where to resume, or `null` when there is nothing worth
   resuming (under 30 s in, or `watched` = played past 95 % / to the end).
-- Entries vanish when the file is gone or changed (size/mtime differ).
+- Entries vanish when the file is gone or changed (size/mtime differ). A
+  download in progress only has to exist; its entry moves to the finished file.
 
 `GET /api/recent?limit=20` → `{"items": [<history entry>, ...]}` newest first:
 played files and files that were only opened (`position` 0, `audio`/`subtitle`/`device_id` null).

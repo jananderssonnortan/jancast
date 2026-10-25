@@ -51,6 +51,11 @@ final class LiveBackend: Backend {
         try await get("/api/probe", query: [URLQueryItem(name: "path", value: path)], timeout: 60)
     }
 
+    func peek(path: String) async throws -> ProbeResult {
+        try await get("/api/probe", query: [URLQueryItem(name: "path", value: path), URLQueryItem(name: "remember", value: "0")],
+                      timeout: 60)
+    }
+
     func recent(limit: Int) async throws -> RecentResponse {
         try await get("/api/recent", query: [URLQueryItem(name: "limit", value: String(limit))], timeout: 10)
     }

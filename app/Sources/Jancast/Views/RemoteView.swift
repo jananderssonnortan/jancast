@@ -8,9 +8,17 @@ struct RemoteLayout: View {
     @Environment(AppModel.self) private var model
 
     static let columnWidth: CGFloat = 440
+    /// How far the film's backdrop reaches below the toolbar: fixed, about the
+    /// remote's height. Following the remote's own height, it shrank and grew
+    /// whenever another file was clicked (a shorter "Reading file…" step, then
+    /// a remote a few points taller or shorter); the library's glow under it
+    /// carries the colours on.
+    static let backdropHeight: CGFloat = 400
     /// Scroll target: the transport stays in view when the drawer opens.
     static let transportID = "transport"
     private static let fade: CGFloat = 24
+    /// Snapshots (development aid) can't render the scroll fade's mask.
+    private static let snapshotting = ProcessInfo.processInfo.environment["JANCAST_SNAPSHOT_DIR"] != nil
 
     var body: some View {
         // The remote keeps its natural height and scrolls when the window (or
@@ -18,6 +26,7 @@ struct RemoteLayout: View {
         GeometryReader { geo in
             let height = model.remoteHeight
             let overflows = height > geo.size.height + 1
+            let look = model.ambience
             VStack(spacing: 0) {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -32,24 +41,57 @@ struct RemoteLayout: View {
                     .scrollBounceBehavior(.basedOnSize)
                     .scrollIndicators(overflows ? .visible : .automatic)
                     // "There is more": the cut-off edge fades instead of slicing a tile.
-                    .mask {
-                        VStack(spacing: 0) {
-                            Color.black
-                            LinearGradient(colors: [.black, .black.opacity(overflows ? 0 : 1)],
-                                           startPoint: .top, endPoint: .bottom)
-                                .frame(height: Self.fade)
-                        }
-                    }
+                    .modifier(BottomFade(height: Self.fade, active: overflows && !Self.snapshotting))
                     .frame(height: height > 0 ? min(height, geo.size.height) : nil)
                     .onChange(of: model.diagnosticsOpen) { _, open in
                         guard open else { return }
                         withAnimation(.snappy) { proxy.scrollTo(Self.transportID, anchor: .bottom) }
                     }
                 }
-                Divider()
-                LibraryPanel(title: "Up next & recent")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Hidden when the drawer leaves only a sliver (a cut-off title).
+                if height == 0 || geo.size.height - height >= 60 {
+                    LibraryPanel(title: "Recent")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Spacer(minLength: 0)
+                }
             }
+            // The poster's colours behind the remote, fading out where the
+            // library starts. macOS 15+ draws it as the window's background
+            // instead (RootView), so it also runs under the toolbar.
+            .background(alignment: .top) {
+                if #unavailable(macOS 15.0) {
+                    ZStack(alignment: .top) {
+                        LibraryWash(palette: model.washPalette, fallback: look?.backdrop)
+                        AmbientBackdrop(image: look?.backdrop, scene: model.backdropScene)
+                            .frame(height: min(Self.backdropHeight, geo.size.height))
+                    }
+                }
+            }
+            .tint(look?.tint)
+            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).minY } action: { y in
+                if abs(y - model.remoteTop) > 0.5 { model.remoteTop = y }
+            }
+        }
+    }
+}
+
+/// Fades the bottom edge out. Inactive: no mask at all (snapshots can't render one).
+private struct BottomFade: ViewModifier {
+    let height: CGFloat
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        if active {
+            content.mask {
+                VStack(spacing: 0) {
+                    Color.black
+                    LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: height)
+                }
+            }
+        } else {
+            content
         }
     }
 }
@@ -63,7 +105,9 @@ private struct RemoteColumn: View {
         Group {
             if model.showsPlayer {
                 PlayingRemote()
-            } else if model.probing {
+            } else if model.probing && model.probe == nil {
+                // Only with nothing loaded: switching files keeps the current
+                // remote until the next one is read (no collapse and regrow).
                 VStack(spacing: 12) {
                     ProgressView()
                     Text("Reading file…").foregroundStyle(.secondary)
@@ -94,26 +138,44 @@ struct NowCard: View {
 
     var body: some View {
         let name = Fmt.name(fileName, nameInfo)
-        HStack(alignment: .center, spacing: 14) {
-            PosterTile(image: poster, fileName: fileName, nameInfo: nameInfo, width: 120, height: 68, radius: 9, large: true)
+        // A film's year goes on the line under the title: "Quiet Hours (2025)"
+        // at this size broke onto two lines.
+        let year = nameInfo?.kind == "movie" ? nameInfo?.year : nil
+        let headline = year.map { name.headline.replacingOccurrences(of: " (\($0))", with: "") } ?? name.headline
+        let detail = [year.map(String.init), detail].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        HStack(alignment: .center, spacing: 16) {
+            PosterTile(image: poster, fileName: fileName, nameInfo: nameInfo, width: 136, height: 76, radius: 10, large: true)
+                .shadow(color: .black.opacity(0.35), radius: 12, y: 5)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(name.headline)
-                    .font(.title2.weight(.bold))
-                    .lineLimit(2)
-                    .help(fileName)
-                if let episode = name.episodeLong {
-                    Text([episode, name.episodeTitle].compactMap { $0 }.joined(separator: " · "))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                } else if let detail {
-                    Text(detail).font(.callout).foregroundStyle(.secondary)
-                }
-                FormatBadges(badges: badges)
-                    .padding(.top, 2)
+            // Always as tall as with a two-line title, a shorter one at the
+            // bottom of it: stepping through the library with ↑ / ↓ moved
+            // everything below by a line whenever the title's length changed,
+            // and centred the episode line and badges still moved half a line.
+            ZStack(alignment: .bottomLeading) {
+                info(headline, name: name, detail: detail, reserve: true).hidden()
+                info(headline, name: name, detail: detail, reserve: false)
             }
             Spacer(minLength: 0)
+        }
+    }
+
+    private func info(_ headline: String, name: MediaName, detail: String, reserve: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(headline)
+                .font(.system(size: 26, weight: .bold))
+                .lineLimit(2, reservesSpace: reserve)
+                .minimumScaleFactor(0.8)
+                .help(fileName)
+            if let episode = name.episodeLong {
+                Text([episode, name.episodeTitle].compactMap { $0 }.joined(separator: " · "))
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else if !detail.isEmpty {
+                Text(detail).font(.callout).foregroundStyle(.secondary)
+            }
+            FormatBadges(badges: badges)
+                .padding(.top, 2)
         }
     }
 }
@@ -145,7 +207,7 @@ struct PosterTile: View {
         }
         .frame(width: width, height: height)
         .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5))
         .accessibilityHidden(true)
     }
 
@@ -166,14 +228,14 @@ struct FormatBadges: View {
     let badges: [FormatBadge]
 
     var body: some View {
-        HStack(spacing: 5) {
+        BadgeFlow(spacing: 5) {
             ForEach(badges, id: \.self) { b in
                 Text(b.text)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(b.warning ? Color.orange : .secondary)
-                    .padding(.horizontal, 5).padding(.vertical, 1)
-                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(b.warning ? Color.orange.opacity(0.7)
-                                                                            : Color.secondary.opacity(0.55), lineWidth: 0.8))
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(b.warning ? Color.orange : .primary.opacity(0.75))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(b.warning ? Color.orange.opacity(0.16) : Color.primary.opacity(0.1)))
                     .fixedSize()
             }
         }
@@ -209,6 +271,41 @@ struct FormatBadges: View {
         case let n?: "\(n) ch"
         default: nil
         }
+    }
+}
+
+/// Badges in a row, wrapping onto the next line instead of widening the
+/// column: at the window's minimum width "1080p HEVC E-AC-3 5.1 CC" didn't fit
+/// beside the poster and pushed everything 3.5 pt past the right edge.
+private struct BadgeFlow: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(proposal.width ?? .infinity, subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (view, p) in zip(subviews, arrange(bounds.width, subviews).points) {
+            view.place(at: CGPoint(x: bounds.minX + p.x, y: bounds.minY + p.y), proposal: .unspecified)
+        }
+    }
+
+    private func arrange(_ maxWidth: CGFloat, _ subviews: Subviews) -> (points: [CGPoint], size: CGSize) {
+        var points: [CGPoint] = []
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, width: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > maxWidth {
+                x = 0
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            points.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            width = max(width, x - spacing)
+        }
+        return (points, CGSize(width: width, height: y + rowHeight))
     }
 }
 
@@ -400,8 +497,8 @@ struct Filmstrip: View {
                 // Played part dimmed.
                 Rectangle().fill(Color.black.opacity(0.4)).frame(width: played)
             }
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Color.primary.opacity(0.12)))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.14), lineWidth: 0.5))
     }
 
     private func filmRoll(width w: CGFloat, played: CGFloat) -> some View {
@@ -464,9 +561,9 @@ struct Filmstrip: View {
         ZStack(alignment: .leading) {
             Capsule().fill(Color.primary.opacity(0.08))
             if let prepared { Capsule().fill(Color.secondary.opacity(0.45)).frame(width: x(prepared, w)) }
-            if let buffered { Capsule().fill(Color.accentColor.opacity(0.7)).frame(width: x(buffered, w)) }
+            if let buffered { Capsule().fill(.tint).frame(width: x(buffered, w)) }
         }
-        .frame(width: w, height: 2)
+        .frame(width: w, height: 3)
     }
 
     /// "+30 s" on the film itself, beside the playhead (after it, or before it
@@ -491,6 +588,7 @@ struct Filmstrip: View {
         RoundedRectangle(cornerRadius: 1.5)
             .fill(Color.white)
             .frame(width: 3, height: Self.height + 8)
+            .shadow(color: .white.opacity(0.55), radius: 5)
             .shadow(color: .black.opacity(0.5), radius: 2)
             .offset(x: px - 1.5, y: -4)
             .allowsHitTesting(false)
@@ -545,8 +643,18 @@ struct RoundButtonStyle: ButtonStyle {
             .font(.system(size: size * 0.36, weight: .semibold))
             .foregroundStyle(prominent ? Color(nsColor: .windowBackgroundColor) : Color.primary)
             .frame(width: size, height: size)
-            .background(Circle().fill(prominent ? Color.primary.opacity(hovering ? 0.85 : 1)
-                                      : Color.primary.opacity(hovering ? 0.14 : 0.08)))
+            .background {
+                if prominent {
+                    Circle().fill(Color.primary.opacity(hovering ? 0.88 : 1))
+                        .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
+                } else {
+                    // A soft surface: lighter at the top, a hairline edge.
+                    Circle().fill(LinearGradient(colors: [Color.primary.opacity(hovering ? 0.18 : 0.12),
+                                                          Color.primary.opacity(hovering ? 0.11 : 0.06)],
+                                                 startPoint: .top, endPoint: .bottom))
+                        .overlay(Circle().strokeBorder(Color.primary.opacity(0.1), lineWidth: 0.5))
+                }
+            }
             .scaleEffect(configuration.isPressed ? 0.93 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
             .contentShape(Circle())
@@ -571,6 +679,7 @@ struct MenuTile<MenuContent: View>: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(caption)
                         .font(.caption2.weight(.bold))
+                        .tracking(0.6)
                         .foregroundStyle(.secondary)
                     Text(value)
                         .lineLimit(1)
@@ -581,11 +690,14 @@ struct MenuTile<MenuContent: View>: View {
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 12).padding(.vertical, 9)
+            .padding(.horizontal, 14).padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.primary.opacity(hovering && enabled ? 0.10 : 0.06)))
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(LinearGradient(colors: [Color.primary.opacity(hovering && enabled ? 0.13 : 0.09),
+                                              Color.primary.opacity(hovering && enabled ? 0.09 : 0.05)],
+                                     startPoint: .top, endPoint: .bottom)))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5))
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .menuStyle(.button)
         .buttonStyle(.plain)

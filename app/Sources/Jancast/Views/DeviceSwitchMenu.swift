@@ -9,23 +9,7 @@ struct DeviceSwitchMenu: View {
     var body: some View {
         let current = model.live?.session?.device?.id
         Menu {
-            Section("Play on") {
-                ForEach(model.devices) { d in
-                    Button {
-                        model.switchDevice(d.id)
-                    } label: {
-                        if d.id == current {
-                            Label(d.displayName, systemImage: "checkmark")
-                        } else {
-                            Text(d.displayName + Self.status(d))
-                        }
-                    }
-                    .disabled(d.reachability == .offline || d.id == current || !model.canControl)
-                }
-            }
-            Divider()
-            Button("Scan for Apple TVs") { Task { await model.loadDevices(.refresh) } }
-                .disabled(model.scanning)
+            DeviceSwitchItems()
         } label: {
             // While moving: "Living Room → Bedroom…" until the new TV reports.
             if let pending = model.pendingDeviceID, pending != current,
@@ -38,6 +22,33 @@ struct DeviceSwitchMenu: View {
         .labelStyle(.titleAndIcon)
         .fixedSize()
         .help("Move playback to another Apple TV or This Mac — it continues where it is")
+        .keyFocus(.device, radius: 8) { DeviceSwitchItems() }
+    }
+}
+
+/// The menu's items, for the toolbar menu and for its keyboard menu.
+private struct DeviceSwitchItems: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let current = model.live?.session?.device?.id
+        Section("Play on") {
+            ForEach(model.devices) { d in
+                Button {
+                    model.switchDevice(d.id)
+                } label: {
+                    if d.id == current {
+                        Label(d.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(d.displayName + Self.status(d))
+                    }
+                }
+                .disabled(d.reachability == .offline || d.id == current || !model.canControl)
+            }
+        }
+        Divider()
+        Button("Scan for Apple TVs") { Task { await model.loadDevices(.refresh) } }
+            .disabled(model.scanning)
     }
 
     private static func status(_ d: Device) -> String {

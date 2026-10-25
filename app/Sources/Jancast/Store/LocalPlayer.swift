@@ -19,6 +19,8 @@ final class LocalPlayer: NSObject, NSWindowDelegate {
     private var playerView: AVPlayerView?
     /// Pause / play / skip cues over the picture.
     private let osd = PlayerOSDState()
+    /// The control bar, shown when the mouse moves.
+    private let controls = PlayerControlsState()
     private var player: AVPlayer?
     private var url: String?
     private var lastApplied = 0            // highest command id applied (acked in reports)
@@ -180,10 +182,11 @@ final class LocalPlayer: NSObject, NSWindowDelegate {
         }
         // A fresh view per stream: a reused AVPlayerView kept showing the
         // previous stream's last subtitle until the next cue.
-        let view = AVPlayerView()
-        // Just the picture: the main window is the remote. AVKit's own controls
-        // (subtitles, speed, Zoom/Fit, AirPlay, ±15 s) acted behind the
-        // session's back. Double-click toggles full screen.
+        let view = KeylessPlayerView()
+        // The picture only: AVKit's own controls (subtitles, speed, Zoom/Fit,
+        // AirPlay, ±15 s) acted behind the session's back. Jancast's control
+        // bar (PlayerControls) shows on mouse movement instead, and sends the
+        // same commands as the remote. Double-click toggles full screen.
         view.controlsStyle = .none
         // Jancast publishes Now Playing itself (NowPlaying.swift); a second
         // entry from the view made a media key toggle playback twice.
@@ -193,20 +196,39 @@ final class LocalPlayer: NSObject, NSWindowDelegate {
         view.addGestureRecognizer(doubleClick)
         view.player = player
         playerView?.player = nil
-        // The picture with the cue layer on top.
-        let container = NSView()
+        // The picture, the cue layer, and the control bar on top.
+        let container = MouseTrackingView()
         let cues = PassThroughHostingView(rootView: PlayerOSD(state: osd))
-        for v in [view, cues] as [NSView] {
+        var layers: [NSView] = [view, cues]
+        if let model {
+            let bar = ControlsHostingView(rootView: PlayerControls(state: controls) { [weak self] in self?.toggleFullScreen() }
+                .environment(model))
+            bar.isActive = { [weak self] in self?.controls.visible == true }
+            // Only its height: the default min/max sizes constrained the window
+            // (it couldn't grow past the bar's widest and changed shape).
+            bar.sizingOptions = .intrinsicContentSize
+            bar.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            bar.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            layers.append(bar)
+        }
+        for v in layers {
             v.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(v)
             NSLayoutConstraint.activate([
                 v.leadingAnchor.constraint(equalTo: container.leadingAnchor),
                 v.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-                v.topAnchor.constraint(equalTo: container.topAnchor),
                 v.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             ])
+            // The bar only as tall as it is, at the bottom; the rest full size.
+            if v is PassThroughHostingView<PlayerOSD> || v === view {
+                v.topAnchor.constraint(equalTo: container.topAnchor).isActive = true
+            }
         }
+        controls.window = window
+        controls.isPaused = { [weak self] in self?.model?.isPaused == true }
+        container.onMove = { [weak self] in self?.controls.show() }
         window?.contentView = container
+        controls.show()
         // What plays, like the main window ("Night Train S6 · E1 — Title"); the
         // device as the subtitle.
         if let file = model?.live?.session?.file, let name = file.name {
@@ -222,8 +244,17 @@ final class LocalPlayer: NSObject, NSWindowDelegate {
         window?.orderFront(nil)
     }
 
+    /// A handled key in this window (Space, ← / →) brings the bar up, as a
+    /// mouse move does.
+    func revealControls() {
+        if window?.isVisible == true { controls.show() }
+    }
+
     @objc private func toggleFullScreen() {
-        window?.toggleFullScreen(nil)
+        guard let window else { return }
+        // In full screen it is what the user looks at: keys (Space, ←/→, Esc) go here.
+        if !window.styleMask.contains(.fullScreen) { window.makeKeyAndOrderFront(nil) }
+        window.toggleFullScreen(nil)
     }
 
     nonisolated func windowWillClose(_ notification: Notification) {
@@ -256,4 +287,11 @@ final class LocalPlayer: NSObject, NSWindowDelegate {
             closing = false
         }
     }
+}
+
+/// The picture never takes the keys: AVPlayerView would step frames on ↑ / ↓
+/// and play or pause AVPlayer on Space behind the session's back. The app's key
+/// monitor handles the window's keys instead.
+final class KeylessPlayerView: AVPlayerView {
+    override var acceptsFirstResponder: Bool { false }
 }

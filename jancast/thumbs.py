@@ -170,8 +170,7 @@ class ThumbnailStore:
 
     @staticmethod
     def key(media):
-        st = media.path.stat()
-        return hashlib.sha1(f"{media.path}|{st.st_size}|{st.st_mtime}".encode()).hexdigest()[:16]
+        return hashlib.sha1(media.fingerprint.encode()).hexdigest()[:16]
 
     def ensure(self, media, keep=()):
         """Start making thumbnails for `media` unless they exist or are being made.

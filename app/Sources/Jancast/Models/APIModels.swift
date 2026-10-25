@@ -28,6 +28,7 @@ struct ProbeResult: Decodable, Equatable {
     var path: String
     var name: String?
     var sizeBytes: Double?
+    var downloading: Bool?          // "movie.mkv.part": a download in progress
     var durationS: Double?
     var video: ProbeVideo?
     var audio: [AudioTrack]?

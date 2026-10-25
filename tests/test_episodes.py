@@ -58,6 +58,15 @@ class NextEpisodeTest(TempDirMixin, unittest.TestCase):
         d = self.folder("Movie.2021.mkv", "Movie.S01E02.mkv")
         self.assertIsNone(episodes.next_episode(d / "Movie.2021.mkv"))
 
+    def test_downloads_in_progress(self):
+        d = self.folder("Show.S01E01.mkv.part", "Show.S01E02.mkv.part", "Show.S01E03.mkv",
+                        "Show.S01E03.mkv.part", "Show.S01E04.part")
+        self.assertEqual(self.next_name(d, "Show.S01E01.mkv.part"), "Show.S01E02.mkv.part")
+        # Not itself once renamed, and the finished copy over a leftover .part.
+        self.assertEqual(self.next_name(d, "Show.S01E01.mkv"), "Show.S01E02.mkv.part")
+        self.assertEqual(self.next_name(d, "Show.S01E02.mkv.part"), "Show.S01E03.mkv")
+        self.assertIsNone(self.next_name(d, "Show.S01E03.mkv"))
+
     def test_multi_episode_file_is_followed_by_the_one_after_it(self):
         d = self.folder("Show.S01E01E02.mkv", "Show.S01E02.mkv", "Show.S01E03.mkv")
         self.assertEqual(self.next_name(d, "Show.S01E01E02.mkv"), "Show.S01E03.mkv")

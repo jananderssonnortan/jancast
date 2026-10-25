@@ -28,7 +28,10 @@ struct DiagnosticsDrawer: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        // A little of the film's colour shows through, so the drawer doesn't
+        // end in a hard grey slab. Not a material: a live blur under charts
+        // that redraw every second costs too much (see DESIGN.md).
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.88))
     }
 }
 
@@ -79,7 +82,8 @@ private struct DrawerHeader: View {
             if model.hasSession {
                 // The verdict in one line, visible on every tab.
                 // In the narrow window, just the icon.
-                let headline = model.live?.diagnosis?.headline
+                // The Summary tab's banner says it in full right below.
+                let headline = model.diagSection == .overview ? nil : model.live?.diagnosis?.headline
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 5) {
                         HealthIcon(health: model.streamHealth)
@@ -124,7 +128,7 @@ private struct DrawerHeader: View {
             .layoutPriority(2)
         }
         .buttonStyle(.borderless)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 20)
         .padding(.vertical, 7)
     }
 
@@ -203,13 +207,25 @@ extension DiagSection {
 
 struct SettingsView: View {
     @AppStorage("autoOpenDiagnostics") private var autoOpenDiagnostics = false
+    @AppStorage(Appearance.defaultsKey) private var appearance = Appearance.system
+    @AppStorage(Updater.autoCheckKey) private var checkForUpdates = true
 
     var body: some View {
         Form {
+            Picker("Appearance", selection: $appearance) {
+                ForEach(Appearance.allCases) { Text($0.title).tag($0) }
+            }
+            .onChange(of: appearance) { _, new in new.apply() }
             Toggle("Show Diagnostics automatically when playback fails", isOn: $autoOpenDiagnostics)
             Text("Measurements are always recorded in the background, so Diagnostics shows the full history whenever you open it.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            if Updater.shared.isAvailable {
+                Toggle("Check for updates automatically", isOn: $checkForUpdates)
+                Text("Once a day, Jancast asks GitHub for the newest release. Installing an update is always up to you.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .frame(width: 460)

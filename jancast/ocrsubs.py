@@ -8,12 +8,13 @@ into the video - a full re-encode. Instead, like Airflow's "Text (OCR)":
    coded, palette with alpha) and when it appears and disappears.
 3. Every bitmap is written as a small black-on-white PNG and recognised in one
    batch by a tiny Swift helper using the Vision framework (offline, all
-   cores). It is compiled once with `swiftc` into the cache directory.
+   cores). It is compiled once with `swiftc` into the cache directory; the
+   downloadable app ships it ready-made ($JANCAST_OCR_HELPER).
 4. The text becomes a WebVTT file, cached per file and track, used from then
    on like any text subtitle track.
 
-`available()` is False without swiftc (Xcode command line tools); picture
-subtitles then keep the burn-in path.
+`available()` is False without the helper or swiftc (Xcode command line
+tools); picture subtitles then keep the burn-in path.
 """
 
 import hashlib
@@ -187,8 +188,22 @@ def png(rows):
 
 # ---- OCR helper -------------------------------------------------------------
 
+def _shipped_helper():
+    """The helper that comes ready-made inside the downloadable app, if any."""
+    p = os.environ.get("JANCAST_OCR_HELPER")
+    return Path(p) if p and os.access(p, os.X_OK) else None
+
+
+def possible():
+    """Whether OCR can work here, without building anything yet."""
+    return _shipped_helper() is not None or (HELPER_SOURCE.exists() and shutil.which("swiftc") is not None)
+
+
 def helper_path():
-    """The compiled Vision helper (built on first use), or None without swiftc."""
+    """The Vision helper: shipped with the app, or compiled on first use; None
+    without swiftc."""
+    if shipped := _shipped_helper():
+        return shipped
     if not HELPER_SOURCE.exists() or not shutil.which("swiftc"):
         return None
     digest = hashlib.sha1(HELPER_SOURCE.read_bytes()).hexdigest()[:12]
@@ -270,8 +285,7 @@ ISO639_TO_VISION = {"eng": "en-US", "swe": "sv-SE", "ger": "de-DE", "deu": "de-D
 
 
 def cache_path(media, sub, accurate=True):
-    st = media.path.stat()
-    key = hashlib.sha1(f"{media.path}|{st.st_size}|{st.st_mtime}|{sub.index}".encode()).hexdigest()[:16]
+    key = hashlib.sha1(f"{media.fingerprint}|{sub.index}".encode()).hexdigest()[:16]
     return cache_dir() / "ocr" / f"{key}{'' if accurate else '.fast'}.vtt"
 
 
@@ -387,7 +401,7 @@ def ensure(media, sub):
 
 def status(media, sub):
     """{"status": ready|working|failed|unavailable, "progress", "error"}."""
-    if not shutil.which("swiftc"):
+    if not possible():
         return {"status": "unavailable", "progress": 0.0,
                 "error": "text recognition needs Xcode's command line tools"}
     job = ensure(media, sub)            # also upgrades a quick result in the background

@@ -33,6 +33,33 @@ VIDEO_EXTS = {".mkv", ".mp4", ".m4v", ".mov", ".avi", ".ts", ".m2ts", ".webm"}
 _EXTS = VIDEO_EXTS | {".wmv", ".mpg", ".mpeg", ".flv", ".ogm", ".divx", ".srt", ".vtt",
                       ".ass", ".ssa", ".sub", ".idx", ".sup", ".nfo"}
 MAX_YEAR = time.localtime().tm_year + 1      # "Blade Runner 2049" is not a release year
+# Suffixes download clients add until a file is complete: "movie.mkv.part".
+PARTIAL_EXTS = {".part", ".!qb", ".!ut", ".crdownload"}
+
+
+def is_partial(path):
+    """A download in progress: "movie.mkv.part", not "Part.mkv" or "movie.part"."""
+    p = PurePath(path)
+    return p.suffix.lower() in PARTIAL_EXTS and PurePath(p.stem).suffix.lower() in VIDEO_EXTS
+
+
+def without_partial(path):
+    """The name the file gets when its download completes ("movie.mkv")."""
+    p = Path(path)
+    return p.with_name(p.stem) if is_partial(p) else p
+
+
+def completed(path):
+    """The finished file once a partial download has been renamed, else None."""
+    p = Path(path)
+    if not is_partial(p) or p.exists():
+        return None
+    done = without_partial(p)
+    return done if done.is_file() else None
+
+
+def is_video(path):
+    return PurePath(without_partial(path)).suffix.lower() in VIDEO_EXTS
 
 # Scene noise: the title ends where the first piece starts. Strong tokens never
 # occur in titles; weak ones are also words ("Charlotte's Web", "Mr. Holland's
@@ -107,7 +134,7 @@ def key(text):
 
 @functools.lru_cache(maxsize=2048)
 def _parse(path):
-    p = PurePath(path)
+    p = PurePath(without_partial(path))
     stem = p.stem if p.suffix.lower() in _EXTS else p.name
     info = _parse_name(stem)
     parent, grand = _folder(p.parent.name), _folder(p.parent.parent.name)

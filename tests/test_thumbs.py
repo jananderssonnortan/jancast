@@ -84,10 +84,18 @@ class StoreTest(TempDirMixin, unittest.TestCase):
 
     def test_key_changes_with_file(self):
         d = self.make_tempdir()
-        m = make_media(d, [video_stream(0), audio_stream(1)])
+        k1 = self.store.key(make_media(d, [video_stream(0), audio_stream(1)]))
+        k2 = self.store.key(make_media(d, [video_stream(0), audio_stream(1)], content=b"different size"))
+        self.assertNotEqual(k1, k2)
+
+    def test_key_kept_while_download_completes(self):
+        d = self.make_tempdir()
+        m = make_media(d, [video_stream(0), audio_stream(1)], name="movie.mkv.part")
         k1 = self.store.key(m)
-        m.path.write_bytes(b"different size")
-        self.assertNotEqual(k1, self.store.key(m))
+        m.path.write_bytes(b"more pieces")
+        m.path.rename(d / "movie.mkv")
+        self.assertEqual(m.path, d / "movie.mkv")
+        self.assertEqual(k1, self.store.key(m))
 
     def test_prune_keeps_recent(self):
         for i in range(thumbs.MAX_CACHED + 5):

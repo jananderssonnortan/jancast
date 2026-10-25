@@ -11,7 +11,6 @@ season if that is in the same folder.
 from pathlib import Path
 
 from . import names
-from .names import VIDEO_EXTS
 
 
 def parse(path):
@@ -36,7 +35,12 @@ def next_episode(path):
     except OSError:
         return None
     for f in entries:
-        if f.suffix.lower() not in VIDEO_EXTS or f == path or "sample" in f.name.lower():
+        if not names.is_video(f) or "sample" in f.name.lower():
+            continue
+        # Itself, also across the rename when its download completes, and a
+        # download in progress next to its finished copy.
+        if names.without_partial(f) == names.without_partial(path) or (
+                names.is_partial(f) and names.without_partial(f).exists()):
             continue
         p = parse(f)
         if p is None or p[0] != show or (p[1] or 0, p[2]) <= after:

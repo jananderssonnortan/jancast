@@ -20,7 +20,8 @@ struct DiagnosticsOverview: View {
                         Text("Stream details").font(.callout.weight(.medium)).foregroundStyle(.secondary)
                     }
                 }
-                .padding(16)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
                 .frame(maxWidth: 1400)
                 .frame(maxWidth: .infinity)
             }
@@ -80,7 +81,8 @@ struct DiagnosticsCharts: View {
                         ProgressView().frame(maxWidth: .infinity, minHeight: 200)
                     }
                 }
-                .padding(16)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
                 .frame(maxWidth: 1400)
                 .frame(maxWidth: .infinity)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in
@@ -389,7 +391,7 @@ private struct KPIGrid: View {
         let delivery = model.telemetry.recentSegmentDelivery
         let ahead = pb?.bufferedAheadS
         let bufferFull = pb?.bufferFull == true || (ahead ?? 0) >= 20
-        let idle = bufferFull && (n?.txBpsAvg10 ?? 0) < (need ?? 0) / 2
+        let idle = bufferFull && (n?.txBpsAvg10 ?? 0) < (need ?? 0)
 
         let (bv, bu) = Fmt.secondsParts(ahead)
         let (hv, hu) = Fmt.secondsParts(prep?.done == true ? nil : live.playback?.position.flatMap { p in prep?.preparedS.map { $0 - p } })
@@ -436,12 +438,12 @@ private struct KPIGrid: View {
             fastStartTile(prep),
             timingTile(session.timing),
         ]
-        // Rows of three: the window is one narrow column. Lines may wrap;
-        // the tiles of a row keep one height.
+        // Rows of two: in the 440 pt column three tiles wrapped their
+        // captions onto two or three lines. The tiles of a row keep one height.
         VStack(spacing: 10) {
-            ForEach(Array(stride(from: 0, to: tiles.count, by: 3)), id: \.self) { row in
+            ForEach(Array(stride(from: 0, to: tiles.count, by: 2)), id: \.self) { row in
                 HStack(alignment: .top, spacing: 10) {
-                    ForEach(row..<min(row + 3, tiles.count), id: \.self) { tiles[$0] }
+                    ForEach(row..<min(row + 2, tiles.count), id: \.self) { tiles[$0] }
                 }
                 .fixedSize(horizontal: false, vertical: true)
             }

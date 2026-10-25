@@ -3,90 +3,121 @@ import SwiftUI
 
 /// The library: what is playing, the next episode, and the last files opened
 /// or played. Click loads a file (ready to play, never starts it); double-click
-/// starts it right away — resumed, on the TV it last played on. Under the
+/// starts it right away — resumed, on the TV picked in the toolbar. Under the
 /// remote, in the same column.
 struct LibraryPanel: View {
     @Environment(AppModel.self) private var model
     let title: String
+    @State private var firstClick: (id: RowID, at: Date)?
 
     var body: some View {
+        // One list that keeps its order: what plays stays in its own row
+        // (highlighted, with live progress), the suggestion sits at the bottom.
+        // Clicking or ↑ / ↓ only moves the selection.
         let now = nowPlayingPath
-        let next = upNext
-        let recents = Array(model.recents.filter { $0.path != now && $0.path != next?.path }.prefix(10))
+        let recents = model.libraryRecents
+        let nowListed = now.map { p in recents.contains { $0.path == p } } ?? false
         // A plain scrolling stack, not a List: NSTableView keeps its scroll
         // anchored to existing rows, so a section inserted above them (Now
         // Playing appearing) ended up hidden under the title bar.
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 2) {
+                UpdateLine()
                 Text(title)
                     .font(.title3.weight(.bold))
-                    .padding(.horizontal, 8)
                     .padding(.top, 14)
-                if let now {
-                    header("Now Playing")
-                    row(.now(now)) {
-                        LibraryRow(path: now, name: model.live?.session?.file?.name,
-                                   nameInfo: model.live?.session?.file?.nameInfo, kind: .nowPlaying)
+                    .padding(.bottom, 6)
+                if let now, !nowListed { nowRow(now) }      // not in Recent yet: on top
+                if recents.isEmpty && now == nil {
+                    Text("Files you open or play show up here.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(recents) { item in
+                    if item.path == now {
+                        nowRow(item.path)
+                    } else {
+                        row(.recent(item.path)) {
+                            LibraryRow(path: item.path, name: item.name, nameInfo: item.nameInfo, kind: .recent, entry: item)
+                        }
                     }
                 }
-                if let next, next.path != now {
-                    header("Up Next")
+                if let next = model.librarySuggestion {
+                    header("Suggested")
                     row(.next(next.path)) {
                         LibraryRow(path: next.path, name: next.name, nameInfo: next.nameInfo, kind: .upNext(next),
                                    entry: model.recents.first { $0.path == next.path })
                     }
                 }
-                header("Recent")
-                if recents.isEmpty {
-                    Text("Files you open or play show up here.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                }
-                ForEach(recents) { item in
-                    row(.recent(item.path)) {
-                        LibraryRow(path: item.path, name: item.name, nameInfo: item.nameInfo, kind: .recent, entry: item)
-                    }
-                }
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 20)
             .padding(.bottom, 12)
-            // The remote's column: same width, centred, so titles and rows
-            // start where the remote's do (12 + 8 = its 20 pt inset).
+            // The remote's column: same width, centred, so titles and row
+            // highlights line up with the remote's 20 pt edges.
             .frame(maxWidth: RemoteLayout.columnWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
-        .background(Color.primary.opacity(0.025))
+        // ↑ / ↓ keep the selected row in view.
+        .onChange(of: selectedID) { _, id in
+            guard let id else { return }
+            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id) }
+        }
+        }
+    }
+
+    /// What plays, in its place in the list: the way back to the player.
+    private func nowRow(_ path: String) -> some View {
+        row(.now(path)) {
+            LibraryRow(path: path, name: model.live?.session?.file?.name,
+                       nameInfo: model.live?.session?.file?.nameInfo, kind: .nowPlaying)
+        }
     }
 
     private func header(_ title: String) -> some View {
-        Text(title)
-            .font(.subheadline.weight(.semibold))
+        Text(title.uppercased())
+            .font(.caption2.weight(.bold))
+            .tracking(0.6)
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.top, 12)
-            .padding(.bottom, 2)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
     }
 
-    /// Click loads the file (never plays it); double-click starts it.
+    /// Click loads the file (never plays it); double-click starts it. One
+    /// gesture reading the click count, and the second click starts the row the
+    /// first one hit: loading a file moves it to the top of Recent, so by the
+    /// second click another row could be under the pointer (and a count-2 tap
+    /// gesture never fired).
     private func row(_ id: RowID, @ViewBuilder content: () -> some View) -> some View {
         SidebarRow(selected: selectedID == id.id) { content() }
-            .onTapGesture(count: 2) { start(id) }
-            .simultaneousGesture(TapGesture().onEnded { open(id) })
+            .id(id.id)
+            .onTapGesture {
+                model.keyFocus = .library
+                let now = Date()
+                if (NSApp.currentEvent?.clickCount ?? 1) >= 2, let first = firstClick,
+                   now.timeIntervalSince(first.at) <= NSEvent.doubleClickInterval + 0.1 {
+                    firstClick = nil
+                    start(first.id)
+                } else {
+                    firstClick = (id, now)
+                    open(id)
+                }
+            }
             .contextMenu { menu(for: id) }
+            // One element per row for VoiceOver: a button, selected or not, with
+            // a Play action beside the default one (load).
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(selectedID == id.id ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { open(id) }
+            .accessibilityAction(named: "Play") { start(id) }
     }
 
     // MARK: - Data
 
-    private var nowPlayingPath: String? {
-        guard model.hasSession, model.phase.isActive else { return nil }
-        return model.live?.session?.file?.path
-    }
+    private var nowPlayingPath: String? { model.nowPlayingPath }
 
-    /// The playing file's next episode, else the loaded file's.
-    private var upNext: NextEpisode? {
-        nowPlayingPath != nil ? model.upNext : model.probe?.next
-    }
+    /// Up Next: of what plays, else of what was played last (AppModel.libraryNext).
+    private var upNext: NextEpisode? { model.libraryNext }
 
     private func entry(_ path: String) -> HistoryEntry? { model.recents.first { $0.path == path } }
 
@@ -94,9 +125,14 @@ struct LibraryPanel: View {
 
     /// Derived from what is on screen, so it always matches the main area.
     private var selectedID: String? {
+        // Where ↑ / ↓ went shows at once, before its file is read.
+        if let c = model.libraryCursor {
+            if let n = model.librarySuggestion, n.path == c { return RowID.next(c).id }
+            return RowID.recent(c).id
+        }
         if model.showsPlayer, let now = nowPlayingPath { return RowID.now(now).id }
         guard let path = model.probe?.path, path != nowPlayingPath else { return nil }
-        if let n = upNext, n.path == path { return RowID.next(path).id }
+        if let n = model.librarySuggestion, n.path == path { return RowID.next(path).id }
         return RowID.recent(path).id
     }
 
@@ -190,13 +226,18 @@ private struct SidebarRow<Content: View>: View {
 
     var body: some View {
         content
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(selected ? Color.accentColor.opacity(0.22)
-                          : hovering ? Color.primary.opacity(0.06) : .clear)
+                let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+                if selected {
+                    // Clearly more than hover, also over the film's colours.
+                    shape.fill(.tint.opacity(0.24))
+                        .overlay(shape.strokeBorder(.tint.opacity(0.5), lineWidth: 1))
+                } else if hovering {
+                    shape.fill(Color.primary.opacity(0.06))
+                }
             }
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
@@ -220,20 +261,23 @@ private struct LibraryRow: View {
 
     var body: some View {
         let display = Fmt.name(fileName, nameInfo ?? entry?.nameInfo)
-        HStack(spacing: 10) {
-            PosterTile(image: poster, fileName: fileName, nameInfo: nameInfo ?? entry?.nameInfo)
+        HStack(spacing: 12) {
+            PosterTile(image: poster, fileName: fileName, nameInfo: nameInfo ?? entry?.nameInfo,
+                       width: 72, height: 40, radius: 6)
+                .shadow(color: .black.opacity(0.25), radius: 4, y: 2)
                 .overlay(alignment: .bottomTrailing) {
                     if isNowPlaying && model.phase == .playing {
                         Image(systemName: "play.fill")      // static: a looping effect redraws the list constantly
                             .font(.system(size: 8, weight: .bold))
                             .foregroundStyle(.white)
                             .padding(3)
-                            .background(Color.accentColor, in: RoundedRectangle(cornerRadius: 3))
+                            .background(.tint, in: RoundedRectangle(cornerRadius: 3))
                             .padding(2)
                     }
                 }
             VStack(alignment: .leading, spacing: 3) {
                 Text(display.headline)
+                    .font(.body.weight(.medium))
                     .lineLimit(1)
                 if let episode = display.episode {
                     Text(episode)
@@ -289,7 +333,7 @@ private struct LibraryRow: View {
             } else {
                 Text("Not started")
                     .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -305,7 +349,7 @@ private struct ProgressRow: View {
                 GeometryReader { g in
                     ZStack(alignment: .leading) {
                         Capsule().fill(Color.secondary.opacity(0.25))
-                        Capsule().fill(Color.accentColor).frame(width: g.size.width * min(1, max(0, fraction)))
+                        Capsule().fill(.tint).frame(width: g.size.width * min(1, max(0, fraction)))
                     }
                 }
                 .frame(width: 44, height: 3)
@@ -316,5 +360,42 @@ private struct ProgressRow: View {
                 .monospacedDigit()
                 .lineLimit(1)
         }
+    }
+}
+
+/// One quiet line over the library while an update is available, being
+/// downloaded, or failed to install (Updater); a failed check stays quiet.
+private struct UpdateLine: View {
+    private var updater: Updater { .shared }
+
+    var body: some View {
+        switch updater.state {
+        case .available(let r):
+            line("arrow.down.circle.fill", "Jancast \(r.version) build \(r.build) is available") {
+                Button(Updater.canInstallInPlace ? "Install" : "Download") { updater.install() }
+                    .help(Updater.canInstallInPlace ? "Download it, quit and open the new Jancast" : "Open the release page")
+            }
+        case .downloading:
+            line(nil, "Downloading the update…") { EmptyView() }
+        case .installFailed(let m):
+            line("exclamationmark.triangle.fill", m) {
+                Button("Release Page") { NSWorkspace.shared.open(Updater.releasesPage) }
+            }
+        default:
+            EmptyView()
+        }
+    }
+
+    private func line(_ symbol: String?, _ text: String, @ViewBuilder action: () -> some View) -> some View {
+        HStack(spacing: 8) {
+            if let symbol { Image(systemName: symbol).foregroundStyle(.tint) } else { ProgressView().controlSize(.small) }
+            Text(text).lineLimit(2)
+            Spacer(minLength: 4)
+            action().controlSize(.small)
+        }
+        .font(.callout)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.07)))
+        .padding(.top, 14)
     }
 }
