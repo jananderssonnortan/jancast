@@ -8,6 +8,7 @@ import SwiftUI
 struct LibraryPanel: View {
     @Environment(AppModel.self) private var model
     let title: String
+    private static let fade: CGFloat = 28
     @State private var firstClick: (id: RowID, at: Date)?
 
     var body: some View {
@@ -58,6 +59,10 @@ struct LibraryPanel: View {
             .frame(maxWidth: RemoteLayout.columnWidth, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+        // A margin the size of the fade: the last row, and a row ↑ / ↓ moves
+        // to, stop above it instead of sitting half faded at the window's edge.
+        .safeAreaPadding(.bottom, Self.fade)
+        .bottomFade(Self.fade)
         // ↑ / ↓ keep the selected row in view.
         .onChange(of: selectedID) { _, id in
             guard let id else { return }
@@ -227,7 +232,7 @@ private struct SidebarRow<Content: View>: View {
     var body: some View {
         content
             .padding(.horizontal, 10)
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -315,13 +320,18 @@ private struct LibraryRow: View {
         return preferred > 0 ? preferred : nil
     }
 
+    /// This film's own accent (from its poster frame), so each row's progress
+    /// has its colour; the window's until the poster is there.
+    private var filmTint: Color? { Ambience.look(for: poster)?.tint }
+
     @ViewBuilder private var status: some View {
         switch kind {
         case .nowPlaying:
             let duration = model.live?.session?.file?.durationS ?? model.live?.playback?.duration
             let pos = model.displayPosition ?? 0
             ProgressRow(fraction: duration.map { $0 > 0 ? pos / $0 : 0 },
-                        text: duration.map { "\(Fmt.clock(max(0, $0 - pos))) left" } ?? model.phase.title)
+                        text: duration.map { "\(Fmt.clock(max(0, $0 - pos))) left" } ?? model.phase.title,
+                        color: filmTint)
         case .upNext, .recent:
             if entry?.watched == true {
                 Label("Watched", systemImage: "checkmark.circle.fill")
@@ -329,7 +339,7 @@ private struct LibraryRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if let e = entry, let pos = e.resumePosition, let d = e.duration, d > 0 {
-                ProgressRow(fraction: pos / d, text: "\(Fmt.clock(max(0, d - pos))) left")
+                ProgressRow(fraction: pos / d, text: "\(Fmt.clock(max(0, d - pos))) left", color: filmTint)
             } else {
                 Text("Not started")
                     .font(.caption)
@@ -342,6 +352,7 @@ private struct LibraryRow: View {
 private struct ProgressRow: View {
     let fraction: Double?
     let text: String
+    var color: Color? = nil
 
     var body: some View {
         HStack(spacing: 6) {
@@ -349,7 +360,8 @@ private struct ProgressRow: View {
                 GeometryReader { g in
                     ZStack(alignment: .leading) {
                         Capsule().fill(Color.secondary.opacity(0.25))
-                        Capsule().fill(.tint).frame(width: g.size.width * min(1, max(0, fraction)))
+                        Capsule().fill(color.map(AnyShapeStyle.init) ?? AnyShapeStyle(.tint))
+                            .frame(width: g.size.width * min(1, max(0, fraction)))
                     }
                 }
                 .frame(width: 44, height: 3)

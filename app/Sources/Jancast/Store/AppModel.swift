@@ -39,10 +39,22 @@ final class AppModel {
     /// The Diagnostics drawer at the bottom of the main window.
     var diagnosticsOpen = false {
         didSet {
+            guard diagnosticsOpen != oldValue else { return }
             // Faster latency probing only while someone is looking.
-            if diagnosticsOpen != oldValue { setTelemetryLevel(diagnosticsOpen ? "detailed" : "basic") }
+            setTelemetryLevel(diagnosticsOpen ? "detailed" : "basic")
+            // Beside the remote when the screen has room for both, else the
+            // drawer under it (DiagnosticsPlacement).
+            if diagnosticsOpen {
+                diagnosticsBeside = DiagnosticsPlacement.makeRoomBeside()
+            } else if diagnosticsBeside {
+                DiagnosticsPlacement.restore()
+                diagnosticsBeside = false
+            }
         }
     }
+    /// Diagnostics open as a panel beside the remote (the window wider), not
+    /// as the drawer under it.
+    var diagnosticsBeside = false
     /// Bumped when the stream health worsens, to pulse the indicator once.
     var healthAlertTick = 0
     @ObservationIgnored private var lastHealth: Health = .neutral
@@ -394,6 +406,25 @@ final class AppModel {
     var selectedAudio: AudioTrack? { probe?.audioTracks.first { $0.id == audioID } }
     var selectedSubtitle: SubtitleTrack? { probe?.subtitleTracks.first { $0.id == subtitleID } }
     var willReencodeVideo: Bool { probe?.video?.mode == "reencode" || (selectedSubtitle?.burnsIn ?? false) }
+    /// Under the ready screen's tiles, only when something about the TV
+    /// needs saying. Not while the first scan runs (the pill says
+    /// "Looking…"): the line came and went at every launch.
+    /// Something plays while another file is on screen (RemoteLayout's bar).
+    var showsNowPlayingBar: Bool {
+        canControl && !showsPlayer && live?.session?.file != nil
+    }
+
+    var deviceHint: String? {
+        guard let d = selectedDevice else {
+            return scanning ? nil : "Choose an Apple TV in the pill above."
+        }
+        switch d.reachability {
+        case .offline: return "\(d.displayName) is offline — choose another Apple TV, or switch it on and scan."
+        case .notResponding: return "\(d.displayName) isn’t responding; Play will try to wake it."
+        case .online: return nil
+        }
+    }
+
     var canPlay: Bool {
         backendStatus == .running && probe != nil && !startingPlayback
             && selectedDevice.map { $0.reachability != .offline } == true
@@ -1105,6 +1136,21 @@ final class AppModel {
             await openFile(path: path, history: recents.first { $0.path == path })
             if seq == libraryMoveSeq { libraryCursor = nil }
         }
+    }
+
+    /// Space: the library's selected row plays (resumed), or pauses /
+    /// resumes when it is what is playing. False when there is nothing to do.
+    func playOrPauseLibrarySelection() -> Bool {
+        let selectedIsPlaying = libraryCursor == nil
+            && (showsPlayer || (probe?.path != nil && probe?.path == nowPlayingPath))
+        if selectedIsPlaying {
+            guard canControl else { return false }
+            togglePause()
+            return true
+        }
+        guard libraryCursor != nil || canPlay else { return false }
+        playLibrarySelection()
+        return true
     }
 
     /// Enter on the ready screen: play what is selected (resumed), also when

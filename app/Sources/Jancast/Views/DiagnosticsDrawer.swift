@@ -10,12 +10,18 @@ struct DiagnosticsDrawer: View {
     /// Height of the drawer; the parent clamps it to what the window allows.
     @Binding var height: Double
     let maxHeight: Double
+    /// A full-height panel beside the remote: no handle to resize it.
+    var beside = false
 
     static let minHeight = 220.0
+    /// The panel beside the remote (DiagnosticsPlacement).
+    static let sideWidth = 520.0
 
     var body: some View {
         VStack(spacing: 0) {
-            ResizeHandle(height: $height, maxHeight: maxHeight)
+            if !beside {
+                ResizeHandle(height: $height, maxHeight: maxHeight)
+            }
             DrawerHeader()
             Divider()
             Group {
@@ -230,5 +236,47 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 460)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Where Diagnostics opens: beside the remote when the screen has room for
+/// both (the window grows to the right, moving left first if it must), else
+/// as the drawer under the remote, as on a small screen or in full screen.
+@MainActor
+enum DiagnosticsPlacement {
+    /// How far the window moved left to make room; moved back on closing.
+    private static var shifted: CGFloat = 0
+
+    private static var mainWindow: NSWindow? {
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true }
+    }
+
+    static func makeRoomBeside() -> Bool {
+        shifted = 0
+        guard let w = mainWindow, let screen = w.screen, !w.styleMask.contains(.fullScreen) else { return false }
+        let extra = CGFloat(DiagnosticsDrawer.sideWidth)
+        let visible = screen.visibleFrame
+        guard w.frame.width + extra <= visible.width else { return false }
+        if w.frame.maxX + extra > visible.maxX {
+            var f = w.frame
+            f.origin.x = max(visible.minX, visible.maxX - extra - f.width)
+            shifted = w.frame.minX - f.origin.x
+            w.setFrame(f, display: true, animate: true)
+        }
+        return true
+    }
+
+    /// After closing: back where it was before making room (once the window
+    /// has narrowed again).
+    static func restore() {
+        let by = shifted
+        shifted = 0
+        guard by > 0 else { return }
+        DispatchQueue.main.async {
+            guard let w = mainWindow, let screen = w.screen else { return }
+            var f = w.frame
+            f.origin.x = min(f.origin.x + by, screen.visibleFrame.maxX - f.width)
+            w.setFrame(f, display: true, animate: true)
+        }
     }
 }

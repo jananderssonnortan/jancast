@@ -4,7 +4,8 @@ The classic pipeline (media.py) remuxes the whole file before the TV gets a
 playlist - about 7 s for a 3 GB episode - because tvOS treats a growing
 playlist as a live stream. Here, as in Airflow:
 
-1. The keyframe times come from the file's own index (keyframes.py), so every
+1. The keyframe times come from the file's own index (keyframes.py: the MKV
+   Cues, or the MP4/MOV sample tables), so every
    segment can be planned before anything is remuxed: a segment starts at the
    first keyframe at least SEGMENT_TARGET_S after the previous one.
 2. Complete VOD playlists (with #EXT-X-ENDLIST) are written immediately.
@@ -38,7 +39,7 @@ import threading
 import time
 from pathlib import Path
 
-from .keyframes import mkv_keyframes
+from .keyframes import video_keyframes
 from .media import (AUDIO_INIT, AUDIO_PLAYLIST, SUBTITLE_PLAYLIST, VIDEO_INIT, VIDEO_PLAYLIST,
                     audio_plan, bcp47, write_master)
 
@@ -60,14 +61,25 @@ def enabled():
     return os.environ.get("JANCAST_FAST_START", "1") != "0"
 
 
-def keyframes_for(media, sub):
-    """The keyframe index if this playback can use fast start, else None."""
+def fast_start_plan(media, sub):
+    """(keyframe index, None) when this playback can use fast start, else
+    (None, why): a few words the app shows after "Preparing"."""
     if not enabled():
-        return None
+        return None, "fast start is turned off"
+    if sub is not None and sub.burns_in:
+        return None, "picture subtitles are burned in"
     vmode, _ = media.video_plan(sub)
-    if vmode != "copy" or (sub is not None and sub.burns_in):
-        return None
-    return mkv_keyframes(media.path)
+    if vmode != "copy":
+        return None, f"{media.video_codec.upper()} video is re-encoded"
+    times = video_keyframes(media.path)
+    if times is not None:
+        return times, None
+    if media.partial:
+        return None, "the file is still downloading"
+    ext = media.path.suffix.lower().lstrip(".")
+    if ext in ("mkv", "webm", "mp4", "m4v", "mov"):
+        return None, f"this {ext.upper()} has no usable keyframe index"
+    return None, f"{ext.upper() or 'this file'} has no keyframe index"
 
 
 def plan_segments(keyframes, duration, target=SEGMENT_TARGET_S):

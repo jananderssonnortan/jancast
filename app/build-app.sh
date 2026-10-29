@@ -10,7 +10,7 @@ APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$APP_DIR/.." && pwd)"
 OUT="${OUT:-$ROOT/build/Jancast.app}"     # package-app.sh builds elsewhere
 ICON_CACHE="$APP_DIR/.build/icon"
-VERSION="${VERSION:-1.2}"
+VERSION="${VERSION:-1.3}"
 # Always increasing, also when VERSION stays the same: the updater compares it.
 BUILD="${BUILD:-$(date -u +%Y%m%d%H%M)}"
 
@@ -23,8 +23,9 @@ if [ -d "$OUT" ]; then rm -r "$OUT"; fi
 mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"
 cp "$BIN" "$OUT/Contents/MacOS/Jancast"
 
-# App icon: Resources/AppIcon.png (1024 px artwork, already in the icon shape),
-# else rendered by scripts/make-icon.swift. Rebuilt when the source changes.
+# App icon: Resources/AppIcon.png (1024 px artwork, already in the icon shape,
+# made by `swift scripts/make-icon.swift Resources/AppIcon.png`), else rendered
+# by that script here. Rebuilt when the source changes.
 # Nice-to-have: skipped silently if it fails.
 ICON_KEY=""
 ICON_SRC="$APP_DIR/Resources/AppIcon.png"

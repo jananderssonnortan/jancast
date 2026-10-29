@@ -18,12 +18,6 @@ struct ReadyRemote: View {
         let converted = model.stereo || audio?.mode == "transcode"
 
         VStack(alignment: .leading, spacing: 18) {
-            // The way back to what plays on the TV (the device is in the toolbar).
-            if model.canControl, let file = model.live?.session?.file, let name = file.name {
-                NowPlayingPill(name: name, nameInfo: file.nameInfo)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-
             NowCard(fileName: probe.displayName, nameInfo: probe.nameInfo,
                     poster: showThumbs ? posterAt.flatMap { model.thumbs.image(at: $0) } : nil,
                     detail: [Fmt.clock(probe.durationS), probe.video?.hdr == true ? "HDR" : nil].compactMap { $0 }
@@ -57,27 +51,37 @@ struct ReadyRemote: View {
 
             ChoiceTiles(probe: probe)
 
-            Notes(probe: probe)
-            OCRNote()
-            if let f = model.lastFailure, f.path == probe.path {
-                // The failure stays in view after "Done", until the next Play.
-                HStack(spacing: 6) {
-                    Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
-                    Text("Playback failed\(f.position.map { " at \(Fmt.clock($0))" } ?? "") — \(f.message)")
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .help(f.message)
-                    Button("Details") { model.showDiagnostics(.overview) }
-                        .buttonStyle(.link)
+            // Always at least the player's footer (sleep timer) tall, so
+            // pressing Play doesn't move the library.
+            VStack(alignment: .leading, spacing: 10) {
+                if let hint = model.deviceHint {
+                    Text(hint).font(.callout).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
                 }
-                .font(.callout)
-                .foregroundStyle(.secondary)
-            }
-            if let finished = model.upNextAfter {
-                Label("Up next after \(finished)", systemImage: "play.square.stack")
+                Notes(probe: probe)
+                OCRNote()
+                if let f = model.lastFailure, f.path == probe.path {
+                    // The failure stays in view after "Done", until the next Play.
+                    HStack(spacing: 6) {
+                        Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+                        Text("Playback failed\(f.position.map { " at \(Fmt.clock($0))" } ?? "") — \(f.message)")
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help(f.message)
+                        Button("Details") { model.showDiagnostics(.overview) }
+                            .buttonStyle(.link)
+                    }
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                }
+                if let finished = model.upNextAfter {
+                    Label("Up next after \(finished)", systemImage: "play.square.stack")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .frame(maxWidth: .infinity, minHeight: RemoteLayout.footerHeight, alignment: .topLeading)
         }
         .task { await model.runDeviceProbeLoop() }
     }
@@ -191,9 +195,6 @@ private struct PlayButtons: View {
             }
             .disabled(!model.canPlay)
             .frame(minHeight: 76)
-            if let hint = deviceHint {
-                Text(hint).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            }
         }
     }
 
@@ -212,23 +213,11 @@ private struct PlayButtons: View {
         .buttonStyle(.borderedProminent)
         .buttonBorderShape(.capsule)
         .controlSize(.large)
+        .tintGlow(Capsule(), radius: model.canPlay ? 14 : 0)
         .keyboardShortcut(.defaultAction)
         .keyFocus(.play, radius: 100) { if model.canPlay { action() } }
     }
 
-    /// Only when something about the TV needs saying. Not while the first
-    /// scan runs (the pill says "Looking…"): the line came and went at every
-    /// launch and moved everything under it.
-    private var deviceHint: String? {
-        guard let d = model.selectedDevice else {
-            return model.scanning ? nil : "Choose an Apple TV in the pill above."
-        }
-        switch d.reachability {
-        case .offline: return "\(d.displayName) is offline — choose another Apple TV, or switch it on and scan."
-        case .notResponding: return "\(d.displayName) isn’t responding; Play will try to wake it."
-        case .online: return nil
-        }
-    }
 }
 
 // MARK: - Track tiles
@@ -332,23 +321,3 @@ private struct Notes: View {
     }
 }
 
-/// Shown while another file is playing on the TV: the way back to it.
-private struct NowPlayingPill: View {
-    @Environment(AppModel.self) private var model
-    let name: String
-    let nameInfo: NameInfo?
-
-    var body: some View {
-        Button { model.playerVisible = true } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "play.tv.fill").foregroundStyle(Color.accentColor)
-                Text(Fmt.name(name, nameInfo).title).lineLimit(1)
-                Image(systemName: "chevron.right").imageScale(.small).foregroundStyle(.secondary)
-            }
-            .font(.callout)
-            .modifier(PillBackground())
-        }
-        .buttonStyle(.plain)
-        .help("Now playing — back to the player")
-    }
-}

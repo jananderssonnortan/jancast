@@ -9,8 +9,9 @@ struct RootView: View {
     @AppStorage("diagnosticsDrawerHeight") private var drawerHeight = 380.0
 
     /// The window is remote-shaped and its width fixed: exactly the remote's
-    /// column, so every screen gets the same layout. Only the height changes
-    /// (from 640 pt, which fits the smallest MacBook screens).
+    /// column, so every screen gets the same layout (Diagnostics beside it add
+    /// their own width). Only the height changes (from 640 pt, which fits the
+    /// smallest MacBook screens).
     static let width = RemoteLayout.columnWidth
 
     /// Remote height the drawer leaves when it can (pill to transport).
@@ -21,10 +22,19 @@ struct RootView: View {
 
     var body: some View {
         @Bindable var model = model
-        detail
+        let beside = model.diagnosticsOpen && model.diagnosticsBeside && model.backendStatus == .running
+        HStack(spacing: 0) {
+            detail
+                .frame(width: Self.width)
+            if beside {
+                Divider()
+                DiagnosticsDrawer(height: $drawerHeight, maxHeight: 0, beside: true)
+                    .frame(width: DiagnosticsDrawer.sideWidth)
+            }
+        }
         // The film's accent everywhere, the drawer and toolbar included.
         .tint(model.ambience?.tint)
-        .frame(width: Self.width)
+        .frame(width: Self.width + (beside ? DiagnosticsDrawer.sideWidth + 1 : 0))
         .frame(minHeight: 640)
         .navigationTitle(title)
         .navigationSubtitle(subtitle)
@@ -57,10 +67,12 @@ struct RootView: View {
             VStack(spacing: 0) {
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if model.diagnosticsOpen && model.backendStatus == .running {
+                if model.diagnosticsOpen && !model.diagnosticsBeside && model.backendStatus == .running {
                     let h = min(max(drawerHeight, DiagnosticsDrawer.minHeight), maxDrawer)
                     DiagnosticsDrawer(height: $drawerHeight, maxHeight: maxDrawer)
-                        .frame(height: h)
+                        // Top-aligned: a pane taller than a short window's drawer
+                        // loses its bottom (which fades), never the tabs at the top.
+                        .frame(height: h, alignment: .top)
                         .transition(.modifier(active: DrawerReveal(fraction: 0, height: h),
                                               identity: DrawerReveal(fraction: 1, height: h)))
                 }

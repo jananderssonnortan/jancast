@@ -310,7 +310,8 @@ extension AppModel {
     /// The remote's mood: the wash from the backdrop's frame, the tint from
     /// the poster's (it stays put while the scene drifts).
     var ambience: Ambience.Look? {
-        guard showsPlayer || probe != nil || launch != nil else { return nil }
+        // Nothing on screen: Jancast's own dark room (Brand).
+        guard showsPlayer || probe != nil || launch != nil else { return Brand.look }
         let poster = heroPoster ?? launch?.poster
         guard let wash = Ambience.look(for: backdropFrame ?? poster ?? washPalette) else { return nil }
         return Ambience.Look(backdrop: wash.backdrop, tint: Ambience.look(for: poster)?.tint ?? wash.tint)

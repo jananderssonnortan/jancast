@@ -399,6 +399,7 @@ struct Prep: Decodable, Equatable {
     var done: Bool?
     var onDemand: Bool?     // fast start: segments made on request, never "the rest"
     var stage: String?      // "video" | "subtitles" (reading picture subtitles as text)
+    var why: String?        // without fast start: why ("AV1 video is re-encoded", …)
     var fastStart: FastStartStats?
     var error: String?
 }

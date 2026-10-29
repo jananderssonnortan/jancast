@@ -26,9 +26,10 @@ charts.</sub></p>
 
 - MKV and other files the Apple TV can't open are converted to a stream it can
   play while you watch. H.264/HEVC video and AAC/AC-3/E-AC-3 (Atmos) audio are
-  copied as they are, so quality is untouched and playback starts in about a
-  second. Files that are still downloading (`movie.mkv.part`) play too, and
-  Jancast follows the file when the download finishes.
+  copied as they are, so quality is untouched and an MKV, MP4 or MOV starts in
+  about a second. When a file has to be prepared first, the player says why.
+  Files that are still downloading (`movie.mkv.part`) play too, and Jancast
+  follows the file when the download finishes.
 - Audio and subtitles can be changed while playing. Text subtitles (SRT, ASS,
   WebVTT, and `.srt` files next to the video or in a subfolder like `Eng/` or
   `Subs/`, also named by language only as in `Subs/English.srt` or
@@ -78,7 +79,7 @@ tvOS 26), or none if you use "This Mac".
 
 ### Download
 
-Download `Jancast-1.2.dmg` from the
+Download `Jancast-1.3.dmg` from the
 [latest release](https://github.com/jananderssonnortan/jancast/releases/latest),
 open it and drag Jancast to Applications. Python and ffmpeg are inside the app,
 so there's nothing else to install. It runs on Apple Silicon Macs (M1 and later).
@@ -163,14 +164,14 @@ it straight away.
 
 | Keys | Action |
 |---|---|
-| Space | Play / pause |
+| Space | Play the file selected in the library, or pause / resume it if it's the one playing |
 | ← / → | Back / forward 10 s (quick presses add up) |
 | ⌘← / ⌘→ | Back / forward 30 s |
 | ↑ / ↓ | Previous / next file in the library (also while playing) |
 | ⌥↑ / ⌥↓, Home / End | First / last file in the library |
 | Page Up / Page Down | Five files up / down in the library |
 | Tab / ⇧Tab | Move between the TV menu, the buttons, Audio, Subtitles and the library |
-| Return / Space | Use the button or open the menu Tab moved to (Esc goes back to the library) |
+| Return | Use the button or open the menu Tab moved to (Esc goes back to the library) |
 | ⌘↑ / ⌘↓ | TV volume |
 | Return | Play the selected file |
 | ⌘. | Stop |
@@ -195,7 +196,8 @@ it straight away.
   Move the mouse to show the controls, including audio and subtitle menus;
   double-click (or the controls' button) for full screen, Esc to leave it.
 - **Diagnostics**: the button at the top right (a coloured dot appears on it when
-  something is wrong). The Summary names the likely cause; Charts, Segments and
+  something is wrong). It opens beside the remote when the screen has room,
+  otherwise under it. The Summary names the likely cause; Charts, Segments and
   Events show the detail.
 
 To try the app without a TV or a video, `open build/Jancast.app --args --mock`
@@ -266,8 +268,9 @@ the app ↔ backend API. Settings and history live in `~/.config/jancast/`, cach
   always shown as soft subtitles.
 - HDR is lost when video has to be re-encoded (AV1/VP9 HDR, or burning in picture
   subtitles on 10-bit HDR).
-- Without fast start (e.g. re-encoded video), the stream needs temporary disk
-  space about the size of the file.
+- Without fast start (re-encoded video, AVI/TS files, files still downloading),
+  playback waits for the start to be prepared, and the stream needs temporary
+  disk space about the size of the file.
 
 ## Licence and credits
 

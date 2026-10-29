@@ -21,10 +21,12 @@ struct DiagnosticsOverview: View {
                     }
                 }
                 .padding(.horizontal, 20)
-                .padding(.vertical, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 16 + 24)      // clear of the bottom fade
                 .frame(maxWidth: 1400)
                 .frame(maxWidth: .infinity)
             }
+            .bottomFade(24)
         } else {
             NoStreamView()
         }
@@ -82,13 +84,15 @@ struct DiagnosticsCharts: View {
                     }
                 }
                 .padding(.horizontal, 20)
-                .padding(.vertical, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 16 + 24)      // clear of the bottom fade
                 .frame(maxWidth: 1400)
                 .frame(maxWidth: .infinity)
                 .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { w in
                     if abs(w - width) > 40 { width = w }       // re-sample only on real size changes
                 }
             }
+            .bottomFade(24)
             // New data is folded in at most once per point's worth of time
             // (5 min over ~160 points ≈ every 2 s; a whole session less often).
             .task(id: SeriesKey(seq: (model.telemetry.samples.last?.seq ?? 0) / refreshEvery(range, maxPoints),
@@ -438,7 +442,7 @@ private struct KPIGrid: View {
             fastStartTile(prep),
             timingTile(session.timing),
         ]
-        // Rows of two: in the 440 pt column three tiles wrapped their
+        // Rows of two: in the narrow column three tiles wrapped their
         // captions onto two or three lines. The tiles of a row keep one height.
         VStack(spacing: 10) {
             ForEach(Array(stride(from: 0, to: tiles.count, by: 2)), id: \.self) { row in

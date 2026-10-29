@@ -108,8 +108,9 @@ The app shows this instead of parsing names itself.
   title-cased. Bare 3–4 digit numbers ("Show - 102") are not taken as episodes.
 
 ### Fast start (`prep.on_demand: true`)
-For MKV files with copied video the backend plans every segment from the
-file's keyframe index and serves complete VOD playlists at once; segments are
+For MKV/WebM and MP4/MOV files with copied video the backend plans every
+segment from the file's keyframe index (Matroska Cues, or the MP4 sample
+tables and edit list) and serves complete VOD playlists at once; segments are
 made when the TV requests them (a jump restarts ffmpeg there). `prep` then
 describes only the window being prepared ahead of the TV: `prepared_s` is
 the end of the segments made without a gap from the one the TV asked for last
@@ -119,6 +120,12 @@ means it reached the end of the file. The app hides "Preparing the rest" for
 such sessions. Little prepared ahead only counts against preparation in the
 diagnosis while the TV also plays on a short buffer (right after a jump nothing
 is made there yet).
+
+Without fast start (`on_demand: false`), `prep.why` says why in a few words the
+app shows after "Preparing": "AV1 video is re-encoded", "picture subtitles are
+burned in", "the file is still downloading", "this MKV has no usable keyframe
+index", "AVI has no keyframe index" or "fast start is turned off". It is null
+with fast start and before ffmpeg starts.
 
 ### `GET /api/thumbs?path=<file>`
 Scrubber preview thumbnails, made in the background (a keyframe-only decode,
@@ -295,6 +302,7 @@ via `session.id` changing and should clear its charts.
                                    //  "wait_max_ms"} - how often and how long the TV
                                    //  waited for a segment to be made
     "stage": "video",              // "subtitles": reading picture subtitles as text (progress)
+    "why": "AV1 video is re-encoded",  // without fast start: why (see below), else null
     "error": null
   },
   "playback": {

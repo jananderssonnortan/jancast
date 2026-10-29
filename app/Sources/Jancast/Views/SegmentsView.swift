@@ -51,7 +51,8 @@ struct SegmentsView: View {
 
             Divider()
             RequestTable(rows: rows, selection: $selection)
-                .frame(minHeight: 80)
+                .frame(minHeight: 44)
+                .bottomFade(16)
         }
     }
 

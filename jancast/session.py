@@ -101,6 +101,7 @@ class Session:
         self.subtitle_delay = float(subtitle_delay or 0)   # seconds, + = later
         self.play_sub = sub         # what ffmpeg gets: a text file for OCR/delayed subtitles
         self._sub_progress = None   # 0..1 while picture subtitles are read as text
+        self.slow_start = None      # why fast start wasn't possible (prep "why")
         self.conf = conf
         self.stereo = stereo
         self.quality = quality
@@ -190,8 +191,10 @@ class Session:
                          + (f", delay {self.subtitle_delay:+.1f} s" if self.subtitle_delay else ""))
             self.play_sub = await self._prepare_subtitles()
 
-            keyframes = await asyncio.get_running_loop().run_in_executor(
-                None, ondemand.keyframes_for, self.media, self.play_sub)
+            keyframes, self.slow_start = await asyncio.get_running_loop().run_in_executor(
+                None, ondemand.fast_start_plan, self.media, self.play_sub)
+            if self.slow_start:
+                tm.event("info", "ffmpeg", f"No fast start: {self.slow_start}; preparing from the start")
             fast = None
             if keyframes:
                 # Fast start: complete playlists now, segments made on request.
@@ -819,13 +822,14 @@ class Session:
             reading = self._sub_progress is not None
             return {"progress": round(self._sub_progress, 3) if reading else 0.0, "speed": None,
                     "prepared_s": 0.0, "done": False, "on_demand": False, "fast_start": None,
-                    "stage": "subtitles" if reading else "video", "error": None}
+                    "stage": "subtitles" if reading else "video", "why": None, "error": None}
         failed = tc.failed
         return {"progress": round(tc.progress, 4), "speed": tc.speed,
                 "prepared_s": round(self.media.duration if tc.done and not failed
                                     else tc.prepared_s, 1),
                 "done": tc.done and not failed, "stage": "video",
                 "on_demand": bool(getattr(tc, "on_demand", False)),
+                "why": self.slow_start,
                 "fast_start": tc.wait_stats() if hasattr(tc, "wait_stats") else None,
                 "error": " | ".join(tc.stderr_tail[-3:]) if failed else None}
 

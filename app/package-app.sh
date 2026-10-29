@@ -10,7 +10,7 @@
 # The app is ad-hoc signed (no Developer ID), so Gatekeeper asks once.
 set -euo pipefail
 
-VERSION="${VERSION:-1.2}"
+VERSION="${VERSION:-1.3}"
 PY_VERSION=3.14.9
 PY_RELEASE=20261021
 PY_SHA256=226d696642a8a53d03b4d5b255b1c319b1575a6d44bd723a953c9f507755e36a
@@ -105,7 +105,7 @@ swift "$APP_DIR/scripts/make-dmg-background.swift" "$BG/bg@2x.png" 2
 tiffutil -cathidpicheck "$BG/bg.png" "$BG/bg@2x.png" -out "$BG/background.tiff" 2>/dev/null
 DMG="$ROOT/build/Jancast-$VERSION.dmg"
 rm -f "$DMG"
-# A mounted image with the same name makes dmgbuild's copy "Jancast 1.2 1",
+# A mounted image with the same name makes dmgbuild's copy "Jancast 1.3 1",
 # and the window's link to its background then points there (no background).
 if [ -d "/Volumes/Jancast $VERSION" ]; then
   echo "Eject the mounted \"Jancast $VERSION\" disk image first." >&2

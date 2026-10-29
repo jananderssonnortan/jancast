@@ -58,18 +58,22 @@ struct PlayingRemote: View {
 
             TrackTiles()
 
-            SleepTimerMenu()
-                .frame(maxWidth: .infinity)
+            // The same slot as the ready screen's notes (RemoteLayout.footerHeight),
+            // so pressing Play or Stop doesn't move the library.
+            Group {
+                if model.phase == .failed {
+                    FailureCard()
+                } else if model.phase == .finished || model.phase == .stopped {
+                    Button("Close Player") { model.playerVisible = false }
+                } else {
+                    SleepTimerMenu()
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: RemoteLayout.footerHeight)
 
             if model.showUpNextCard, let next = model.upNext {
                 UpNextRow(next: next)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
-            if model.phase == .failed {
-                FailureCard()
-            } else if model.phase == .finished || model.phase == .stopped {
-                Button("Close Player") { model.playerVisible = false }
-                    .frame(maxWidth: .infinity)
             }
         }
         .animation(.spring(duration: 0.35), value: model.showUpNextCard)
@@ -97,9 +101,16 @@ struct StatusLine: View {
             } else {
                 switch model.phase {
                 case .preparing:
-                    Text(live?.prep?.stage == "subtitles"
-                         ? "Reading subtitles as text… \(Fmt.percent(live?.prep?.progress))"
-                         : "Preparing… \(Fmt.percent(live?.prep?.progress))")
+                    if live?.prep?.stage == "subtitles" {
+                        Text("Reading subtitles as text… \(Fmt.percent(live?.prep?.progress))")
+                    } else {
+                        // Why it isn't a fast start ("AV1 video is re-encoded").
+                        Text("Preparing… \(Fmt.percent(live?.prep?.progress))"
+                             + (live?.prep?.why.map { " · " + $0 } ?? ""))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help(live?.prep?.why.map { "No fast start: \($0), so the stream is prepared from the start" } ?? "")
+                    }
                 case .connecting: Text("Connecting to \(name)…")
                 case .pairing: Text("Waiting for the pairing code…")
                 case .paused: Text("Paused")
@@ -172,12 +183,21 @@ private struct PrepProgress: View {
                     .frame(width: 60)
                 Text("Preparing · \(Fmt.percent(progress))").monospacedDigit()
             }
-            .help(prep?.speed.map { "ffmpeg is preparing the rest of the stream at \(Fmt.speed($0)) realtime; ready to \(Fmt.clock(prep?.preparedS))." } ?? "")
+            .help(help(prep))
         } else if phase == .buffering {
             Text("Buffering…")
         } else if phase == .stalled {
             Text("Playback stalled")
         }
+    }
+
+    private func help(_ prep: Prep?) -> String {
+        var parts: [String] = []
+        if let speed = prep?.speed {
+            parts.append("ffmpeg is preparing the rest of the stream at \(Fmt.speed(speed)) realtime; ready to \(Fmt.clock(prep?.preparedS)).")
+        }
+        if let why = prep?.why { parts.append("No fast start: \(why).") }
+        return parts.joined(separator: " ")
     }
 }
 

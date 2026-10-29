@@ -94,6 +94,7 @@ struct EventsView: View {
                     let chosen = rows.filter { selection.contains($0.id) }
                     return [NSItemProvider(object: Self.text(for: chosen) as NSString)]
                 }
+                .bottomFade(16)
             }
         }
     }

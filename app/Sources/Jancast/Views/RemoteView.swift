@@ -7,7 +7,7 @@ import SwiftUI
 struct RemoteLayout: View {
     @Environment(AppModel.self) private var model
 
-    static let columnWidth: CGFloat = 440
+    static let columnWidth: CGFloat = 480
     /// How far the film's backdrop reaches below the toolbar: fixed, about the
     /// remote's height. Following the remote's own height, it shrank and grew
     /// whenever another file was clicked (a shorter "Reading file…" step, then
@@ -16,6 +16,10 @@ struct RemoteLayout: View {
     static let backdropHeight: CGFloat = 400
     /// Scroll target: the transport stays in view when the drawer opens.
     static let transportID = "transport"
+    /// The line under the tiles: the sleep timer while playing, notes on the
+    /// ready screen. Both keep at least this height, so Play and Stop don't
+    /// move the library.
+    static let footerHeight: CGFloat = 28
     private static let fade: CGFloat = 24
     /// Snapshots (development aid) can't render the scroll fade's mask.
     private static let snapshotting = ProcessInfo.processInfo.environment["JANCAST_SNAPSHOT_DIR"] != nil
@@ -41,7 +45,7 @@ struct RemoteLayout: View {
                     .scrollBounceBehavior(.basedOnSize)
                     .scrollIndicators(overflows ? .visible : .automatic)
                     // "There is more": the cut-off edge fades instead of slicing a tile.
-                    .modifier(BottomFade(height: Self.fade, active: overflows && !Self.snapshotting))
+                    .bottomFade(Self.fade, active: overflows && !Self.snapshotting)
                     .frame(height: height > 0 ? min(height, geo.size.height) : nil)
                     .onChange(of: model.diagnosticsOpen) { _, open in
                         guard open else { return }
@@ -55,7 +59,15 @@ struct RemoteLayout: View {
                 } else {
                     Spacer(minLength: 0)
                 }
+                // The way back to what plays on the TV while another file is on
+                // screen: docked under the library, so it comes and goes without
+                // moving the remote (above the title it pushed everything down).
+                if model.showsNowPlayingBar {
+                    NowPlayingBar()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
+            .animation(.snappy(duration: 0.25), value: model.showsNowPlayingBar)
             // The poster's colours behind the remote, fading out where the
             // library starts. macOS 15+ draws it as the window's background
             // instead (RootView), so it also runs under the toolbar.
@@ -73,6 +85,15 @@ struct RemoteLayout: View {
                 if abs(y - model.remoteTop) > 0.5 { model.remoteTop = y }
             }
         }
+    }
+}
+
+extension View {
+    /// Whatever scrolls out at the bottom of the window fades there instead
+    /// of being sliced by the edge and its rounded corners: the remote, the
+    /// library and the Diagnostics panes all end the same way.
+    func bottomFade(_ height: CGFloat = 28, active: Bool = true) -> some View {
+        modifier(BottomFade(height: height, active: active))
     }
 }
 
@@ -641,12 +662,16 @@ struct RoundButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: size * 0.36, weight: .semibold))
-            .foregroundStyle(prominent ? Color(nsColor: .windowBackgroundColor) : Color.primary)
+            .foregroundStyle(prominent ? Color.white : Color.primary)
             .frame(width: size, height: size)
             .background {
                 if prominent {
-                    Circle().fill(Color.primary.opacity(hovering ? 0.88 : 1))
-                        .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
+                    // The accent (the film's, or Brand's), lit from above,
+                    // with its own glow under it.
+                    Circle().fill(.tint)
+                        .overlay(Circle().fill(LinearGradient(colors: [.white.opacity(hovering ? 0.28 : 0.2), .clear],
+                                                              startPoint: .top, endPoint: .center)))
+                        .tintGlow(Circle(), radius: size * 0.2)
                 } else {
                     // A soft surface: lighter at the top, a hairline edge.
                     Circle().fill(LinearGradient(colors: [Color.primary.opacity(hovering ? 0.18 : 0.12),
@@ -707,6 +732,60 @@ struct MenuTile<MenuContent: View>: View {
     }
 }
 
+extension View {
+    /// The warm light under a primary button, in the accent (Brand: the
+    /// screen's glow in the dark room).
+    func tintGlow(_ shape: some Shape, radius: CGFloat = 14) -> some View {
+        background {
+            shape.fill(.tint)
+                .blur(radius: radius)
+                .opacity(0.55)
+                .offset(y: radius * 0.4)
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+// MARK: - Now playing bar
+
+/// Docked at the bottom while something plays and another file is on
+/// screen: what plays, Pause / Resume, and a click back to the player.
+struct NowPlayingBar: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        let file = model.live?.session?.file
+        let title = file?.name.map { Fmt.name($0, file?.nameInfo).title } ?? "Now playing"
+        HStack(spacing: 10) {
+            Button { model.togglePause() } label: {
+                Image(systemName: model.isPaused ? "play.fill" : "pause.fill")
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(RoundButtonStyle(size: 30, prominent: true))
+            .help(model.isPaused ? "Resume" : "Pause")
+            Button { model.playerVisible = true } label: {
+                HStack(spacing: 6) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(title).font(.callout.weight(.semibold)).lineLimit(1)
+                        Text(model.isPaused ? "Paused" : "Playing on \(model.live?.session?.device?.name ?? "Apple TV")")
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.right").imageScale(.small).foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Back to the player")
+        }
+        .padding(.horizontal, 20).padding(.vertical, 10)
+        .frame(maxWidth: RemoteLayout.columnWidth)
+        .frame(maxWidth: .infinity)
+        .background(.thickMaterial)
+        .overlay(alignment: .top) { Divider() }
+    }
+}
+
 // MARK: - Empty state
 
 struct EmptyDropView: View {
@@ -715,10 +794,21 @@ struct EmptyDropView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: targeted ? "arrow.down.circle.fill" : "film.stack")
-                .font(.system(size: 44, weight: .light))
-                .foregroundStyle(targeted ? Color.accentColor : .secondary)
-                .contentTransition(.symbolEffect(.replace))
+            Group {
+                if targeted {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 52, weight: .light))
+                        .foregroundStyle(.tint)
+                        .frame(width: 96, height: 96)
+                } else {
+                    // The icon: the dark room and its screen (Brand).
+                    Image(nsImage: NSApp.applicationIconImage)
+                        .resizable()
+                        .frame(width: 96, height: 96)
+                        .shadow(color: .black.opacity(0.3), radius: 10, y: 4)
+                }
+            }
+            .transition(.opacity)
             Text("Drop a video or press ⌘O")
                 .font(.title3.weight(.semibold))
             Text("Or pick something from the library. MKV files are remuxed on the fly and streamed to your Apple TV.")
@@ -729,6 +819,9 @@ struct EmptyDropView: View {
             HStack {
                 Button("Choose File…") { model.presentOpenPanel() }
                     .controlSize(.large)
+                    .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
+                    .tintGlow(Capsule(), radius: 10)
                     .keyboardShortcut(.defaultAction)
                 if model.isMock {
                     Button("Sample") { Task { await model.openFile(path: AppModel.sampleMoviePath) } }

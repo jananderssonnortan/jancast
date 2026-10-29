@@ -352,7 +352,10 @@ final class MockBackend: Backend {
             }
             r.session = session
             r.prep = Prep(progress: s.prepared / Sim.duration, speed: s.ffDone ? s.lastSpeed : s.ffSpeed,
-                          preparedS: s.prepared, done: s.ffDone, error: nil)
+                          preparedS: s.prepared, done: s.ffDone,
+                          why: !s.reencode ? nil : session.video?.codec == "av1" ? "AV1 video is re-encoded"
+                              : "picture subtitles are burned in",
+                          error: nil)
             if s.tvReported {
                 r.playback = Playback(position: s.position, duration: Sim.duration, rate: s.phase == "playing" ? 1 : 0,
                                       bufferedAheadS: max(0, s.loadedEnd - s.position),

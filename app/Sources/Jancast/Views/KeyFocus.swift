@@ -5,8 +5,9 @@ import SwiftUI
 /// macOS keyboard navigation off (the default, where Tab only visits text
 /// fields and lists and these buttons and menus were out of reach). The key
 /// monitor (AppDelegate) moves it; each control marks itself with
-/// `.keyFocus(…)`, draws the ring while it has it and says what Return /
-/// Space do. The library is where focus starts and where Esc brings it back.
+/// `.keyFocus(…)`, draws the ring while it has it and says what Return does
+/// (Space always plays or pauses the library's selection). The library is
+/// where focus starts and where Esc brings it back.
 enum KeyFocus: Hashable, CaseIterable {
     // Tab order: as on screen, top to bottom. The ready screen has startOver,
     // play, audio and subtitles; the player stop … sleep (play is Play/Pause).
@@ -14,12 +15,12 @@ enum KeyFocus: Hashable, CaseIterable {
 }
 
 extension View {
-    /// A button Tab can reach: Return / Space run `action`.
+    /// A button Tab can reach: Return runs `action`.
     func keyFocus(_ target: KeyFocus, radius: CGFloat, action: @escaping () -> Void) -> some View {
         modifier(KeyFocusRing(target: target, radius: radius, opensMenu: false) { _ in action() })
     }
 
-    /// A menu Tab can reach: Return / Space (or ↑ / ↓) open `menu` under the
+    /// A menu Tab can reach: Return (or ↑ / ↓) opens `menu` under the
     /// control, the same items a click shows.
     func keyFocus(_ target: KeyFocus, radius: CGFloat, @ViewBuilder menu: @escaping () -> some View) -> some View {
         modifier(KeyFocusRing(target: target, radius: radius, opensMenu: true) { anchor in
@@ -114,7 +115,7 @@ extension AppModel {
         keyFocus = order[(i + (back ? order.count - 1 : 1)) % order.count]
     }
 
-    /// The focused control's action (Return / Space); false on the library.
+    /// The focused control's action (Return); false on the library.
     func activateKeyFocus(menusOnly: Bool = false) -> Bool {
         guard keyFocus != .library, let a = keyActions[keyFocus] else { return false }
         if menusOnly && !a.opensMenu { return false }

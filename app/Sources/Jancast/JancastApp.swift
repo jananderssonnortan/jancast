@@ -178,11 +178,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // End the first / last, Page Up / Down (fn ↑ / ↓) a few rows.
             let mods = event.modifierFlags.intersection([.command, .option, .control, .shift])
             // Tab / ⇧Tab move Jancast's own focus over the remote's controls
-            // (KeyFocus.swift), also with macOS keyboard navigation off. Return /
-            // Space work the focused control, ↑ / ↓ open a focused menu (and no
+            // (KeyFocus.swift), also with macOS keyboard navigation off. Return
+            // works the focused control (Space always plays or pauses what the
+            // library has selected, below), ↑ / ↓ open a focused menu (and no
             // longer move the list), Esc goes back to the library.
             if (event.keyCode == 48 && (mods.isEmpty || mods == .shift))
-                || (mods.isEmpty && [36, 76, 49, 53, 125, 126].contains(event.keyCode)),
+                || (mods.isEmpty && [36, 76, 53, 125, 126].contains(event.keyCode)),
                !(responder is NSText), !(responder is NSTableView),
                event.window?.attachedSheet == nil,
                event.window?.identifier?.rawValue.hasPrefix("main") == true {
@@ -279,10 +280,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if NSApp.isFullKeyboardAccessEnabled, responder is NSControl { return event }
             if event.window?.attachedSheet != nil || event.window?.isSheet == true { return event }
             let handled = MainActor.assumeIsolated { () -> Bool in
-                guard let m = AppModel.current, m.canControl else { return false }
-                m.togglePause()
-                if inPlayerWindow { m.localPlayer.revealControls() }
-                return true
+                guard let m = AppModel.current else { return false }
+                // The This Mac window: what it shows. The main window: what the
+                // library has selected, wherever Tab focus is.
+                guard !inPlayerWindow else {
+                    guard m.canControl else { return false }
+                    m.togglePause()
+                    m.localPlayer.revealControls()
+                    return true
+                }
+                return m.playOrPauseLibrarySelection()
             }
             return handled ? nil : event
         }

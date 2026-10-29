@@ -20,10 +20,10 @@ It talks to the Python backend only through the contract in `docs/API.md`.
 
 ## Windows and flow
 
-### Main window (`Window "main"`, 440 pt wide, min 640 tall)
+### Main window (`Window "main"`, 480 pt wide, min 640 tall)
 
 The TV is the screen, so the Mac shows a **remote** (`RemoteLayout`): one
-440 pt column — now card, filmstrip timeline, big round transport,
+480 pt column (440 until 1.3) — now card, filmstrip timeline, big round transport,
 audio/subtitle tiles — with the **library** under it. Always one column:
 the window is exactly the column's width and only its height changes, so it
 stays remote-shaped and looks the same on every screen (a side-by-side
@@ -140,7 +140,12 @@ saved (unlike the simulator). Not in mock mode.
 
 Toggled with View ▸ Show Diagnostics (⌥⌘I; ⌥⌘D
 is taken by macOS for Dock hiding), the toolbar button, or the
-indicator popover; resizable from its top edge (height remembered). Optional
+indicator popover. When the screen has room for both, it opens as a
+full-height 520 pt panel beside the remote (the window grows to the right,
+moving left first if it must, and moves back on closing); otherwise, and in
+full screen, as a drawer under the remote, resizable from its top edge
+(height remembered) and top-aligned, so a short window cuts a pane's bottom,
+never its tabs. Optional
 Settings toggle "Open Diagnostics automatically when playback fails"
 (default off). While it is open the app POSTs `/api/telemetry
 {"level":"detailed"}` (1 Hz latency probe), and `basic` when it closes.

@@ -83,11 +83,20 @@ class EligibilityTest(TempDirMixin, unittest.TestCase):
         d = self.make_tempdir()
         av1 = make_media(d, [video_stream(0, "av1"), audio_stream(1)], name="a.mkv")
         h264 = make_media(d, [video_stream(0), audio_stream(1)], name="b.mkv")
-        with mock.patch.object(ondemand, "mkv_keyframes", return_value=[0.0, 6.0]):
-            self.assertIsNone(ondemand.keyframes_for(av1, None))
-            self.assertEqual(ondemand.keyframes_for(h264, None), [0.0, 6.0])
+        with mock.patch.object(ondemand, "video_keyframes", return_value=[0.0, 6.0]):
+            self.assertEqual(ondemand.fast_start_plan(av1, None), (None, "AV1 video is re-encoded"))
+            self.assertEqual(ondemand.fast_start_plan(h264, None), ([0.0, 6.0], None))
             with mock.patch.dict("os.environ", {"JANCAST_FAST_START": "0"}):
-                self.assertIsNone(ondemand.keyframes_for(h264, None))
+                self.assertEqual(ondemand.fast_start_plan(h264, None), (None, "fast start is turned off"))
+
+    def test_says_why_there_is_no_index(self):
+        d = self.make_tempdir()
+        cases = {"c.mkv": "this MKV has no usable keyframe index", "c.mp4": "this MP4 has no usable keyframe index",
+                 "c.avi": "AVI has no keyframe index", "c.mkv.part": "the file is still downloading"}
+        with mock.patch.object(ondemand, "video_keyframes", return_value=None):
+            for name, why in cases.items():
+                m = make_media(d, [video_stream(0), audio_stream(1)], name=name)
+                self.assertEqual(ondemand.fast_start_plan(m, None), (None, why), name)
 
     def test_no_index_for_non_mkv(self):
         d = self.make_tempdir()
@@ -193,7 +202,7 @@ class FfmpegTest(TempDirMixin, unittest.TestCase):
         shutil.rmtree(cls.dir, ignore_errors=True)
 
     def test_index_matches_real_keyframes(self):
-        times = keyframes.mkv_keyframes(self.clip)
+        times = keyframes.video_keyframes(self.clip)
         out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-skip_frame", "nokey",
                               "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(self.clip)],
                              capture_output=True, text=True, check=True).stdout
@@ -205,7 +214,7 @@ class FfmpegTest(TempDirMixin, unittest.TestCase):
         out = self.make_tempdir()
         self.warnings = []
         with mock.patch.object(ondemand, "AHEAD_SEGMENTS", ahead):
-            od = ondemand.OnDemand(m, m.audio[0], None, out, keyframes.mkv_keyframes(self.clip), stereo,
+            od = ondemand.OnDemand(m, m.audio[0], None, out, keyframes.video_keyframes(self.clip), stereo,
                                    on_warning=self.warnings.append)
             try:
                 od.start(0)
@@ -266,3 +275,26 @@ class FfmpegTest(TempDirMixin, unittest.TestCase):
             src[track] = float(first.strip(","))
         for track in firsts:
             self.assertAlmostEqual(firsts[track], src[track] + ondemand.TIMELINE_OFFSET_S, delta=0.002)
+
+
+class Mp4FfmpegTest(FfmpegTest):
+    """The same with an MP4: its index comes from the sample tables (stss,
+    stts, ctts and the edit list B-frames bring)."""
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = Path(__import__("tempfile").mkdtemp(prefix="jancast-test-"))
+        cls.clip = cls.dir / "clip.mp4"
+        meta = cls.dir / "chapters.txt"
+        meta.write_text(";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=30000\ntitle=One\n"
+                        "[CHAPTER]\nTIMEBASE=1/1000\nSTART=30000\nEND=62000\ntitle=Two\n")
+        ffmpeg("-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24", "-f", "lavfi",
+               "-i", "sine=frequency=440:sample_rate=48000", "-i", str(meta), "-t", "62",
+               "-map", "0:v", "-map", "1:a", "-map_chapters", "2",
+               "-c:v", "libx264", "-g", "48", "-bf", "2", "-c:a", "ac3", "-b:a", "96k",
+               "-metadata:s:a:0", "language=swe", str(cls.clip))
+
+    def test_fragmented_mp4_has_no_index(self):
+        frag = self.make_tempdir() / "frag.mp4"
+        ffmpeg("-i", str(self.clip), "-map", "0:v", "-map", "0:a", "-c", "copy",
+               "-movflags", "frag_keyframe+empty_moov+delay_moov", str(frag))   # AC-3 needs delay_moov
+        self.assertIsNone(keyframes.video_keyframes(frag))
