@@ -19,6 +19,8 @@ final class Updater {
         let build: Int
         let url: URL
         let sha256: String
+        /// What's new, in Markdown (docs/releases/<version>.md).
+        var notes: String? = nil
     }
 
     enum State: Equatable {
@@ -68,7 +70,8 @@ final class Updater {
     /// At launch: at most once a day, when allowed in Settings.
     func checkAtLaunch() async {
         guard isAvailable, UserDefaults.standard.bool(forKey: Self.autoCheckKey) else { return }
-        if let last = UserDefaults.standard.object(forKey: Self.lastCheckKey) as? Date,
+        let testing = ProcessInfo.processInfo.environment["JANCAST_UPDATE_FEED"] != nil
+        if !testing, let last = UserDefaults.standard.object(forKey: Self.lastCheckKey) as? Date,
            Date().timeIntervalSince(last) < 20 * 3600 { return }
         await check()
     }
@@ -84,8 +87,9 @@ final class Updater {
         case .available(let r):
             let a = NSAlert()
             a.messageText = "A newer Jancast is available"
-            a.informativeText = "Jancast \(r.version) (build \(r.build)) — you have build \(Self.currentBuild)."
+            a.informativeText = "Jancast \(r.version) (build \(r.build)) — you have \(Self.currentVersion) (build \(Self.currentBuild))."
                 + (Self.canInstallInPlace ? " Jancast quits, updates and opens again." : "")
+                + (r.notes.map { "\n\n" + Self.plainNotes($0) } ?? "")
             a.addButton(withTitle: Self.canInstallInPlace ? "Install and Relaunch" : "Download")
             a.addButton(withTitle: "Later")
             if a.runModal() == .alertFirstButtonReturn { install() }
@@ -200,6 +204,16 @@ final class Updater {
             p.waitUntilExit()
             if p.terminationStatus != 0 { throw UpdateError("Unpacking the update failed.") }
         }.value
+    }
+
+    /// The notes without Markdown's marks, for an alert.
+    static func plainNotes(_ md: String) -> String {
+        md.split(separator: "\n", omittingEmptySubsequences: false).map { line in
+            var l = String(line)
+            if l.hasPrefix("#") { l = l.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces) }
+            if l.hasPrefix("- ") || l.hasPrefix("* ") { l = "• " + l.dropFirst(2) }
+            return l.replacingOccurrences(of: "**", with: "").replacingOccurrences(of: "`", with: "")
+        }.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func alert(_ title: String, _ message: String) {

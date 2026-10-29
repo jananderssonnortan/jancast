@@ -280,6 +280,7 @@ final class AppModel {
             }
             if lastPhase.isActive && (ph == .stopped || ph == .finished) && !switchingTracks {
                 playerVisible = false            // back to Setup, same file still selected
+                setSleepTimer(minutes: nil)      // it belonged to what played
                 // Watched to the end: Setup gets the next episode, ready to play (never autoplays).
                 let watched = ph == .finished || r.playback.map { ($0.position ?? 0) >= ($0.duration ?? .infinity) * 0.95 } == true
                 let next = watched ? upNext : nil
@@ -437,6 +438,7 @@ final class AppModel {
             resumeEntry = nil
             UserDefaults.standard.set(path, forKey: "lastFilePath")
             if let h = p.resume ?? history { applyHistory(h, offerResume: offerResume) }
+            if !Self.hasOwnChoices(p.resume ?? history) { applySeriesChoices(to: p) }
             followOCR()
             followThumbnails()
             await loadRecents()      // opened files are listed in Recents too (listed ones keep their place)
@@ -702,6 +704,7 @@ final class AppModel {
             return
         }
         startingPlayback = true
+        rememberSeriesChoices(probe, audio: audioID, subtitle: subtitleID, stereo: stereo, delay: subtitleDelay)
         let req = PlayRequest(path: probe.path, audio: audioID, subtitle: subtitleID, deviceId: device.id,
                               stereo: stereo, startPosition: startPosition,
                               subtitleDelay: subtitleID != 0 && subtitleDelay != 0 ? subtitleDelay : nil)
@@ -738,6 +741,8 @@ final class AppModel {
             audioID = req.audio; subtitleID = req.subtitle; stereo = req.stereo
             subtitleDelay = req.subtitleDelay ?? 0
         }
+        rememberSeriesChoices(sessionTracks, audio: req.audio, subtitle: req.subtitle, stereo: req.stereo,
+                              delay: req.subtitleDelay ?? 0)
         switchingTracks = true
         startingPlayback = true
         Task {
@@ -983,6 +988,10 @@ final class AppModel {
     var upNext: NextEpisode? { sessionTracks?.next }
     /// Title of the episode that finished when Setup was filled with the next one.
     var upNextAfter: String?
+
+    /// Sleep timer (AppModel+Sleep.swift): playback stops at this time.
+    var sleepAt: Date?
+    @ObservationIgnored var sleepTask: Task<Void, Never>?
     /// Session for which the user closed the Up Next card.
     var upNextDismissedFor: String?
 
@@ -1136,8 +1145,7 @@ final class AppModel {
         // Opening a file lists it in Recents, so the probe nearly always has a
         // history entry (without tracks). Only an episode left part-way with
         // tracks of its own keeps them; otherwise match the ones just played.
-        let ownTracks = p.resume.map { $0.audio != nil && $0.resumePosition != nil } ?? false
-        if !ownTracks, let old = c.probe {
+        if !Self.hasOwnChoices(p.resume), let old = c.probe {
             (audioID, subtitleID) = Self.carryOver(from: old, audio: c.audio, subtitle: c.subtitle, to: p)
             stereo = c.stereo
         }
@@ -1158,11 +1166,21 @@ final class AppModel {
     /// lines, so it never stands in for full subtitles, nor the other way
     /// round), then text vs. burned-in pictures, then title and codec.
     static func carryOver(from old: ProbeResult, audio: Int?, subtitle: Int, to new: ProbeResult) -> (audio: Int, subtitle: Int) {
+        carryOver(audio: old.audioTracks.first { $0.id == audio },
+                  subtitle: subtitle == 0 ? nil : old.subtitleTracks.first { $0.id == subtitle },
+                  // Turned off on purpose (the old file offered a default) → keep off.
+                  keepOff: subtitle == 0 && (old.defaultSubtitle ?? 0) != 0,
+                  to: new)
+    }
+
+    /// The same, from the tracks themselves (also what a series remembers).
+    static func carryOver(audio oa: AudioTrack?, subtitle os: SubtitleTrack?, keepOff: Bool,
+                          to new: ProbeResult) -> (audio: Int, subtitle: Int) {
         func lang(_ l: String?) -> String { (l ?? "").lowercased() }
         func title(_ t: String?) -> String { (t ?? "").lowercased() }
         let defaultAudio = new.defaultAudio ?? new.audioTracks.first?.id ?? 1
         var a = defaultAudio
-        if let oa = old.audioTracks.first(where: { $0.id == audio }) {
+        if let oa {
             let same = new.audioTracks.filter { lang($0.lang) == lang(oa.lang) }
             a = (same.first { title($0.title) == title(oa.title) && $0.codec == oa.codec }
                  ?? same.first { title($0.title) == title(oa.title) }
@@ -1171,10 +1189,9 @@ final class AppModel {
         }
         let newDefaultSub = new.subtitleTracks.contains { $0.id == new.defaultSubtitle } ? (new.defaultSubtitle ?? 0) : 0
         var s = newDefaultSub
-        if subtitle == 0 {
-            // Turned off on purpose (the old file offered a default) → keep off.
-            if (old.defaultSubtitle ?? 0) != 0 { s = 0 }
-        } else if let os = old.subtitleTracks.first(where: { $0.id == subtitle }) {
+        if keepOff {
+            s = 0
+        } else if let os {
             func score(_ t: SubtitleTrack) -> Int {
                 ((t.forced ?? false) == (os.forced ?? false) ? 8 : 0)
                     + (t.burnsIn == os.burnsIn ? 4 : 0)

@@ -273,19 +273,31 @@ private struct DiagnosticsGlyph: View {
 /// launch shows just the window's colours and then the remote, no flash of this.
 private struct StartingView: View {
     @State private var shown = false
+    @State private var slow = false
 
     var body: some View {
         VStack(spacing: 14) {
             ProgressView().controlSize(.large)
             Text("Starting Jancast…").font(.title3)
             Text("Launching the streaming backend").foregroundStyle(.secondary)
+            if slow {
+                Text("The first start after installing or updating can take up to a minute.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+                    .transition(.opacity)
+            }
         }
+        .animation(.easeIn(duration: 0.3), value: slow)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .opacity(shown ? 1 : 0)
         .animation(.easeIn(duration: 0.3), value: shown)
         .task {
             try? await Task.sleep(for: .seconds(1.2))
             shown = true
+            try? await Task.sleep(for: .seconds(7))
+            slow = true
         }
     }
 }

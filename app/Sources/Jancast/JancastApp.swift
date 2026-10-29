@@ -84,6 +84,8 @@ struct AppCommands: Commands {
             Button("TV Volume Down") { model.changeTVVolume(up: false) }
                 .keyboardShortcut(.downArrow, modifiers: .command)
                 .disabled(!model.canControl)
+            Menu("Sleep Timer") { SleepTimerItems().environment(model) }
+                .disabled(!model.canControl)
             Toggle("Mac Volume Keys Control the TV", isOn: Binding(
                 get: { VolumeKeys.shared.enabled }, set: { VolumeKeys.shared.enabled = $0 }))
             Divider()

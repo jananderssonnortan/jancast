@@ -8,9 +8,9 @@ set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$APP_DIR/.." && pwd)"
-OUT="$ROOT/build/Jancast.app"
+OUT="${OUT:-$ROOT/build/Jancast.app}"     # package-app.sh builds elsewhere
 ICON_CACHE="$APP_DIR/.build/icon"
-VERSION="${VERSION:-1.1}"
+VERSION="${VERSION:-1.2}"
 # Always increasing, also when VERSION stays the same: the updater compares it.
 BUILD="${BUILD:-$(date -u +%Y%m%d%H%M)}"
 

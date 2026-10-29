@@ -47,7 +47,10 @@ final class BackendProcess {
         return res
     }
 
-    func start(timeout: TimeInterval = 30) async throws -> Int {
+    /// 90 s: the first start after installing or updating can be slow while
+    /// macOS checks the thousands of files in the bundled Python (30 s
+    /// sometimes ran out, "did not report ready").
+    func start(timeout: TimeInterval = 90) async throws -> Int {
         let dir = Self.backendDirectory
         if dir == Self.bundledRuntime { return try await startBundled(dir, timeout: timeout) }
         let python = dir.appendingPathComponent(".venv/bin/python")

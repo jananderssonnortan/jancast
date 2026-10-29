@@ -29,7 +29,16 @@ final class LiveBackend: Backend {
             let port = try await process.start()
             baseURL = URL(string: "http://127.0.0.1:\(port)")
         }
-        let _: HealthResponse = try await get("/api/health", timeout: 5)
+        // A few tries: right after the ready line a slow first start can
+        // still take a moment to answer.
+        for attempt in 1...3 {
+            do {
+                let _: HealthResponse = try await get("/api/health", timeout: 10)
+                return
+            } catch where attempt < 3 {
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
     }
 
     func shutdown() {

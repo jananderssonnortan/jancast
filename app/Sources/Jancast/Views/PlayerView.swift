@@ -58,6 +58,9 @@ struct PlayingRemote: View {
 
             TrackTiles()
 
+            SleepTimerMenu()
+                .frame(maxWidth: .infinity)
+
             if model.showUpNextCard, let next = model.upNext {
                 UpNextRow(next: next)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -197,12 +200,14 @@ private struct Transport: View {
                 .accessibilityLabel("Stop")
                 .disabled(!model.canControl)
                 .opacity(model.canControl ? 1 : 0.5)
+                .keyFocus(.stop, radius: 17) { if model.canControl { model.stop() } }
             Button { model.skip(-10) } label: { Image(systemName: "gobackward.10") }
                 .buttonStyle(RoundButtonStyle(size: 56))
                 .help("Back 10 seconds (←)")
                 .accessibilityLabel("Back 10 seconds")
                 .disabled(!canSkip)
                 .opacity(canSkip ? 1 : 0.5)
+                .keyFocus(.back, radius: 28) { if canSkip { model.skip(-10) } }
             Group {
                 if starting {
                     Button {} label: { ProgressView().controlSize(.regular) }
@@ -227,12 +232,17 @@ private struct Transport: View {
                     .opacity(model.canControl ? 1 : 0.5)
                 }
             }
+            .keyFocus(.play, radius: 38) {
+                if failed { if !model.startingPlayback { model.retryPlayback() } }
+                else if model.canControl && !starting { model.togglePause() }
+            }
             Button { model.skip(30) } label: { Image(systemName: "goforward.30") }
                 .buttonStyle(RoundButtonStyle(size: 56))
                 .help("Forward 30 seconds (⌘→)")
                 .accessibilityLabel("Forward 30 seconds")
                 .disabled(!canSkip)
                 .opacity(canSkip ? 1 : 0.5)
+                .keyFocus(.forward, radius: 28) { if canSkip { model.skip(30) } }
             VolumeButton()
         }
     }
@@ -255,6 +265,10 @@ private struct VolumeButton: View {
             .accessibilityLabel("TV volume")
             .disabled(!model.canControl)
             .opacity(usable ? 1 : 0.5)
+            .keyFocus(.volume, radius: 17) {
+                guard model.canControl else { return }
+                if model.playsOnAppleTV { open.toggle() } else { model.changeTVVolume(up: true) }
+            }
             .popover(isPresented: $open, arrowEdge: .bottom) {
                 HStack(spacing: 12) {
                     Button { model.changeTVVolume(up: false) } label: { Image(systemName: "speaker.minus.fill") }
@@ -282,17 +296,10 @@ private struct TrackTiles: View {
         let disabled = probe == nil || (!model.canControl && model.phase != .failed)
         HStack(spacing: 8) {
             MenuTile(caption: "AUDIO", value: audioValue) {
-                if let probe {
-                    Picker("Audio", selection: Binding(get: { model.sessionAudioID ?? -1 }, set: { model.switchTracks(audio: $0) })) {
-                        ForEach(probe.audioTracks) { t in Text(Fmt.trackTitle(t)).tag(t.id) }
-                    }
-                    .pickerStyle(.inline)
-                    .labelsHidden()
-                    Divider()
-                    Toggle("Downmix to Stereo", isOn: Binding(get: { model.sessionStereo }, set: { model.switchTracks(stereo: $0) }))
-                }
+                if let probe { PlayerAudioMenu(probe: probe) }
             }
             .help(model.currentAudioTitle + " — click to change; playback restarts at the current position")
+            .keyFocus(.audio, radius: 12) { if let probe, !disabled { PlayerAudioMenu(probe: probe) } }
             MenuTile(caption: "SUBTITLES", value: subtitleValue) {
                 if let probe {
                     SubtitleMenuContent(probe: probe, inPlayer: true)
@@ -300,6 +307,9 @@ private struct TrackTiles: View {
             }
             .help((model.sessionSubtitleID == 0 ? "Off" : model.currentSubtitleTitle)
                   + " — click to change; playback restarts at the current position")
+            .keyFocus(.subtitles, radius: 12) {
+                if let probe, !disabled { SubtitleMenuContent(probe: probe, inPlayer: true) }
+            }
         }
         .disabled(disabled)
     }
@@ -317,6 +327,22 @@ private struct TrackTiles: View {
         let tracks = model.sessionTracks?.subtitleTracks ?? []
         let name = tracks.first { $0.id == id }.map { TrackLabel.subtitle($0, in: tracks) } ?? model.currentSubtitleTitle
         return name + SubtitleMenuContent.labelSuffix(model.sessionSubtitleDelay)
+    }
+}
+
+/// The playing session's audio menu, for the tile and for its keyboard menu.
+private struct PlayerAudioMenu: View {
+    @Environment(AppModel.self) private var model
+    let probe: ProbeResult
+
+    var body: some View {
+        Picker("Audio", selection: Binding(get: { model.sessionAudioID ?? -1 }, set: { model.switchTracks(audio: $0) })) {
+            ForEach(probe.audioTracks) { t in Text(Fmt.trackTitle(t)).tag(t.id) }
+        }
+        .pickerStyle(.inline)
+        .labelsHidden()
+        Divider()
+        Toggle("Downmix to Stereo", isOn: Binding(get: { model.sessionStereo }, set: { model.switchTracks(stereo: $0) }))
     }
 }
 

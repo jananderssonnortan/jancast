@@ -216,10 +216,12 @@ private struct PlayButtons: View {
         .keyFocus(.play, radius: 100) { if model.canPlay { action() } }
     }
 
-    /// Only when something about the TV needs saying.
+    /// Only when something about the TV needs saying. Not while the first
+    /// scan runs (the pill says "Looking…"): the line came and went at every
+    /// launch and moved everything under it.
     private var deviceHint: String? {
         guard let d = model.selectedDevice else {
-            return model.scanning ? "Looking for Apple TVs…" : "Choose an Apple TV in the pill above."
+            return model.scanning ? nil : "Choose an Apple TV in the pill above."
         }
         switch d.reachability {
         case .offline: return "\(d.displayName) is offline — choose another Apple TV, or switch it on and scan."

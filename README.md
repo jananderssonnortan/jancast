@@ -78,7 +78,7 @@ tvOS 26), or none if you use "This Mac".
 
 ### Download
 
-Download `Jancast-1.1.dmg` from the
+Download `Jancast-1.2.dmg` from the
 [latest release](https://github.com/jananderssonnortan/jancast/releases/latest),
 open it and drag Jancast to Applications. Python and ffmpeg are inside the app,
 so there's nothing else to install. It runs on Apple Silicon Macs (M1 and later).
@@ -167,6 +167,10 @@ it straight away.
 | ← / → | Back / forward 10 s (quick presses add up) |
 | ⌘← / ⌘→ | Back / forward 30 s |
 | ↑ / ↓ | Previous / next file in the library (also while playing) |
+| ⌥↑ / ⌥↓, Home / End | First / last file in the library |
+| Page Up / Page Down | Five files up / down in the library |
+| Tab / ⇧Tab | Move between the TV menu, the buttons, Audio, Subtitles and the library |
+| Return / Space | Use the button or open the menu Tab moved to (Esc goes back to the library) |
 | ⌘↑ / ⌘↓ | TV volume |
 | Return | Play the selected file |
 | ⌘. | Stop |
@@ -177,7 +181,10 @@ it straight away.
 - **Timeline**: hover to see a frame and its time, click or drag to jump. On the
   ready screen a click starts playback at that point.
 - **Audio and subtitles**: change them from the two tiles; playback restarts at
-  the same spot. Series remember your choice for the next episode.
+  the same spot. Each series remembers your audio language, subtitles and
+  subtitle delay, so every episode of it starts the way you left the last one.
+- **Sleep timer**: under the tiles while playing (or *Playback → Sleep Timer*).
+  Playback stops after 15 minutes to 2 hours, and Resume picks up from there.
 - **Apple TV**: the one picked in the menu at the top left is where everything
   plays, whichever file you start, until you pick another.
 - **TV volume** goes through the Apple TV, so it must be set up to control your

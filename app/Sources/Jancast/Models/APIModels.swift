@@ -53,7 +53,7 @@ struct ProbeVideo: Decodable, Equatable {
     var reason: String?
 }
 
-struct AudioTrack: Decodable, Identifiable, Hashable {
+struct AudioTrack: Codable, Identifiable, Hashable {
     var id: Int
     var label: String?
     var lang: String?
@@ -70,7 +70,7 @@ struct AudioTrack: Decodable, Identifiable, Hashable {
     }
 }
 
-struct SubtitleTrack: Decodable, Identifiable, Hashable {
+struct SubtitleTrack: Codable, Identifiable, Hashable {
     var id: Int
     var label: String?
     var lang: String?

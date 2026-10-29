@@ -8,8 +8,9 @@ import SwiftUI
 /// `.keyFocus(…)`, draws the ring while it has it and says what Return /
 /// Space do. The library is where focus starts and where Esc brings it back.
 enum KeyFocus: Hashable, CaseIterable {
-    // Tab order: as on screen, top to bottom.
-    case device, startOver, play, audio, subtitles, library
+    // Tab order: as on screen, top to bottom. The ready screen has startOver,
+    // play, audio and subtitles; the player stop … sleep (play is Play/Pause).
+    case device, startOver, stop, back, play, forward, volume, audio, subtitles, sleep, library
 }
 
 extension View {

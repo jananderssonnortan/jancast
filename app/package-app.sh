@@ -3,12 +3,14 @@
 # Python (+ pyatv), ffmpeg/ffprobe and OCR helper inside, and a disk image:
 #   ./package-app.sh              → ../build/Jancast-<version>.dmg, and for the
 #                                   updater Jancast-<version>.zip + latest.json
-# (and ../build/package/Jancast.app; ../build/Jancast.app stays the dev build).
+# The app is put together in .build/dist/package.noindex (".noindex": Spotlight,
+# and so Alfred, don't list it next to the installed one); ../build/Jancast.app,
+# the dev build, is left alone.
 # Apple Silicon only. Downloads and the ffmpeg build are cached in .build/dist.
 # The app is ad-hoc signed (no Developer ID), so Gatekeeper asks once.
 set -euo pipefail
 
-VERSION="${VERSION:-1.1}"
+VERSION="${VERSION:-1.2}"
 PY_VERSION=3.14.9
 PY_RELEASE=20261021
 PY_SHA256=226d696642a8a53d03b4d5b255b1c319b1575a6d44bd723a953c9f507755e36a
@@ -17,7 +19,7 @@ FFMPEG_VERSION=8.1.2
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$APP_DIR/.." && pwd)"
 DIST="$APP_DIR/.build/dist"
-APP="$ROOT/build/package/Jancast.app"
+APP="$DIST/package.noindex/Jancast.app"
 RES="$APP/Contents/Resources"
 mkdir -p "$DIST/dl"
 
@@ -46,9 +48,8 @@ if [ ! -x "$FF/bin/ffmpeg" ] || [ ! -x "$FF/bin/ffprobe" ]; then
 fi
 
 # ---- The app itself ----
-VERSION="$VERSION" bash "$APP_DIR/build-app.sh"
-rm -rf "$APP"; mkdir -p "$(dirname "$APP")"
-ditto "$ROOT/build/Jancast.app" "$APP"
+mkdir -p "$(dirname "$APP")"
+OUT="$APP" VERSION="$VERSION" bash "$APP_DIR/build-app.sh"
 
 # ---- Python (python-build-standalone: relocatable, no system Python needed) ----
 PY_TAR="$DIST/dl/cpython-$PY_VERSION+$PY_RELEASE-aarch64-apple-darwin-install_only.tar.gz"
@@ -104,7 +105,7 @@ swift "$APP_DIR/scripts/make-dmg-background.swift" "$BG/bg@2x.png" 2
 tiffutil -cathidpicheck "$BG/bg.png" "$BG/bg@2x.png" -out "$BG/background.tiff" 2>/dev/null
 DMG="$ROOT/build/Jancast-$VERSION.dmg"
 rm -f "$DMG"
-# A mounted image with the same name makes dmgbuild's copy "Jancast 1.1 1",
+# A mounted image with the same name makes dmgbuild's copy "Jancast 1.2 1",
 # and the window's link to its background then points there (no background).
 if [ -d "/Volumes/Jancast $VERSION" ]; then
   echo "Eject the mounted \"Jancast $VERSION\" disk image first." >&2
@@ -122,12 +123,20 @@ rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" "$APP/Contents/Info.plist")
 REPO_URL="https://github.com/jananderssonnortan/jancast/releases/download/v$VERSION"
+# What's new: docs/releases/<version>.md, shown in the app before Install
+# (and the GitHub release's text: gh release create --notes-file).
+NOTES="$ROOT/docs/releases/$VERSION.md"
+NOTES_JSON=null
+if [ -f "$NOTES" ]; then
+  NOTES_JSON=$(/usr/bin/python3 -c 'import json, sys; print(json.dumps(open(sys.argv[1]).read().strip()))' "$NOTES")
+fi
 cat > "$ROOT/build/latest.json" <<JSON
 {
   "version": "$VERSION",
   "build": $BUILD,
   "url": "${UPDATE_URL:-$REPO_URL/Jancast-$VERSION.zip}",
-  "sha256": "$(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
+  "sha256": "$(shasum -a 256 "$ZIP" | cut -d' ' -f1)",
+  "notes": $NOTES_JSON
 }
 JSON
 echo "Built $ZIP ($(du -h "$ZIP" | cut -f1)) and latest.json (build $BUILD)"

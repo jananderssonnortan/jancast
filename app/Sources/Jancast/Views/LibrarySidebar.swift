@@ -367,11 +367,17 @@ private struct ProgressRow: View {
 /// downloaded, or failed to install (Updater); a failed check stays quiet.
 private struct UpdateLine: View {
     private var updater: Updater { .shared }
+    @State private var showNotes = false
 
     var body: some View {
         switch updater.state {
         case .available(let r):
-            line("arrow.down.circle.fill", "Jancast \(r.version) build \(r.build) is available") {
+            line("arrow.down.circle.fill", r.version == Updater.currentVersion
+                 ? "A newer build of Jancast \(r.version) is available" : "Jancast \(r.version) is available") {
+                if let notes = r.notes {
+                    Button("What’s New") { showNotes.toggle() }
+                        .popover(isPresented: $showNotes, arrowEdge: .bottom) { ReleaseNotes(markdown: notes) }
+                }
                 Button(Updater.canInstallInPlace ? "Install" : "Download") { updater.install() }
                     .help(Updater.canInstallInPlace ? "Download it, quit and open the new Jancast" : "Open the release page")
             }
@@ -397,5 +403,39 @@ private struct UpdateLine: View {
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.07)))
         .padding(.top, 14)
+    }
+}
+
+/// An update's release notes (Markdown: headings, bullets, bold, links).
+private struct ReleaseNotes: View {
+    let markdown: String
+
+    var body: some View {
+        // No scroll view: the notes are a few lines, and a scrolling popover
+        // sized from its content can come out with no height.
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(markdown.split(separator: "\n").enumerated()), id: \.offset) { _, raw in
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.hasPrefix("#") {
+                    Text(inline(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces)))
+                        .font(.headline)
+                        .padding(.top, 4)
+                } else if line.hasPrefix("- ") || line.hasPrefix("* ") {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("•")
+                        Text(inline(String(line.dropFirst(2))))
+                    }
+                } else {
+                    Text(inline(line))
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 380, alignment: .leading)
+        .padding(16)
+    }
+
+    private func inline(_ s: String) -> AttributedString {
+        (try? AttributedString(markdown: s)) ?? AttributedString(s)
     }
 }
