@@ -1,0 +1,4 @@
+#!/bin/sh
+# Run luftbro from its venv: bin/luftbro movie.mkv
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" exec "$ROOT/.venv/bin/python" -m luftbro "$@"
