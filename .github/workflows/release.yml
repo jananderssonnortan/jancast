@@ -1,0 +1,119 @@
+name: Release
+
+# Builds the version in luftbro/__init__.py and makes a draft release of it.
+# The updater and the website only see published releases, so nothing reaches
+# anyone until scripts/publish_release.py, run on the maintainer's Mac where
+# the signing key is, signs the draft's latest.json and publishes it.
+# A build-only run on the bundled-versions branch merges that branch's pull
+# request when everything passes.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_only:
+        description: "Build and check only, no release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+  attestations: write
+
+concurrency: release
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BUILD_ONLY: ${{ inputs.build_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check the version
+        id: version
+        run: |
+          v=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' luftbro/__init__.py)
+          for f in app/build-app.sh app/package-app.sh; do
+            grep -qxF "VERSION=\"\${VERSION:-$v}\"" "$f" || { echo "::error file=$f::VERSION in $f is not $v"; exit 1; }
+          done
+          [ -f "docs/releases/$v.md" ] || { echo "::error::docs/releases/$v.md is missing"; exit 1; }
+          if [ "$BUILD_ONLY" != true ] && gh release view "v$v" >/dev/null 2>&1; then
+            echo "::error::There is already a release v$v"; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "ffmpeg=$(sed -n 's/^FFMPEG_VERSION=//p' app/package-app.sh)" >> "$GITHUB_OUTPUT"
+
+      # Compiling ffmpeg takes most of the build; it is redone only for a new ffmpeg version.
+      - id: ffmpeg-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: app/.build/dist/ffmpeg-${{ steps.version.outputs.ffmpeg }}
+          key: ffmpeg-${{ steps.version.outputs.ffmpeg }}-macos14-arm64
+
+      - name: Build
+        run: mkdir -p build && VERSION="${{ steps.version.outputs.version }}" bash app/package-app.sh
+
+      - if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: app/.build/dist/ffmpeg-${{ steps.version.outputs.ffmpeg }}
+          key: ffmpeg-${{ steps.version.outputs.ffmpeg }}-macos14-arm64
+
+      # The tests make their sample clips with encoders (x264, x265, VP9) that the
+      # bundled LGPL ffmpeg leaves out, so they use Homebrew's ffmpeg with the bundled Python.
+      - name: Test with the bundled Python
+        run: |
+          brew install ffmpeg
+          PYTHONDONTWRITEBYTECODE=1 \
+            app/.build/dist/package.noindex/Luftbro.app/Contents/Resources/python/bin/python3 -m unittest discover -s tests
+
+      - name: Check the disk image
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          mnt=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "build/Luftbro-$v.dmg" >/dev/null
+          trap 'hdiutil detach "$mnt" >/dev/null' EXIT
+          app="$mnt/Luftbro.app"
+          plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$app/Contents/Info.plist"; }
+          [ "$(plist CFBundleIdentifier)" = com.luftbro.app ]
+          [ "$(plist CFBundleShortVersionString)" = "$v" ]
+          codesign --verify --deep --strict "$app"
+          "$app/Contents/Resources/bin/ffmpeg" -hide_banner -version | head -1
+          PYTHONPATH="$app/Contents/Resources/backend" PYTHONDONTWRITEBYTECODE=1 \
+            "$app/Contents/Resources/python/bin/Luftbro Backend" -c "import luftbro, pyatv; print('luftbro', luftbro.__version__)"
+          if grep -rIl "$GITHUB_WORKSPACE" "$app"; then
+            echo "::error::The build folder's path is inside the app"; exit 1
+          fi
+
+      # A signed record that these files come from this workflow at this commit;
+      # scripts/publish_release.py checks it before signing latest.json.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            build/Luftbro-${{ steps.version.outputs.version }}.dmg
+            build/Luftbro-${{ steps.version.outputs.version }}.zip
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Luftbro-${{ steps.version.outputs.version }}
+          path: |
+            build/Luftbro-${{ steps.version.outputs.version }}.dmg
+            build/Luftbro-${{ steps.version.outputs.version }}.zip
+            build/latest.json
+          retention-days: 7
+
+      - name: Create the draft release
+        if: inputs.build_only != true
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          gh release create "v$v" --draft --target "$GITHUB_SHA" --title "Luftbro $v" \
+            --notes-file "docs/releases/$v.md" \
+            "build/Luftbro-$v.dmg" "build/Luftbro-$v.zip" build/latest.json
+
+      - name: Merge the bundled-versions pull request
+        if: inputs.build_only == true && github.ref_name == 'bundled-versions'
+        run: gh pr merge bundled-versions --rebase --match-head-commit "$GITHUB_SHA"

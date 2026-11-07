@@ -168,6 +168,13 @@ You don't have to take that on trust:
   the Python backend, ffmpeg compiled from its official source, Python from
   [python-build-standalone](https://github.com/astral-sh/python-build-standalone)
   (checksum-verified) and pyatv from PyPI.
+- Releases are built on GitHub by the
+  [Release workflow](../.github/workflows/release.yml), which signs a record of
+  what it built and from which commit. With the [GitHub CLI](https://cli.github.com),
+  `gh attestation verify Luftbro-<version>.dmg -R luftbro/luftbro` checks that
+  your download is exactly that build.
+- Updates are signed with a key that is kept off GitHub, and the app installs
+  only updates whose signature checks out.
 - Upload the `.dmg` to [VirusTotal](https://www.virustotal.com), or check it
   with your own antivirus.
 - Or [build it yourself](building.md) and don't use the download at all.

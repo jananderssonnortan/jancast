@@ -10,7 +10,7 @@ APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$APP_DIR/.." && pwd)"
 OUT="${OUT:-$ROOT/build/Luftbro.app}"     # package-app.sh builds elsewhere
 ICON_CACHE="$APP_DIR/.build/icon"
-VERSION="${VERSION:-1.0}"
+VERSION="${VERSION:-1.0.1}"
 # Always increasing, also when VERSION stays the same: the updater compares it.
 BUILD="${BUILD:-$(date -u +%Y%m%d%H%M)}"
 

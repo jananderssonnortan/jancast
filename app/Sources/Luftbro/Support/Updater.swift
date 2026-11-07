@@ -3,12 +3,17 @@ import CryptoKit
 
 /// Updates from the GitHub releases, without a framework: the newest release
 /// carries `latest.json` (build number, zip, SHA-256; package-app.sh writes
-/// it). The app checks it at launch (at most daily, if allowed in Settings)
-/// and from the app menu; Install downloads the zip, checks it, and a small
-/// shell helper swaps the app once Luftbro has quit, then reopens it.
+/// it) and `latest.json.sig`, its Ed25519 signature, made by
+/// scripts/publish_release.py with a key that never goes to GitHub. A feed
+/// whose signature doesn't verify against `updateKey` is ignored, so write
+/// access to the releases alone can't ship an update. The app checks at
+/// launch (at most daily, if allowed in Settings) and from the app menu;
+/// Install downloads the zip, checks it, and a small shell helper swaps the
+/// app once Luftbro has quit, then reopens it.
 ///
 /// Only the downloadable app updates itself: a development build keeps its
-/// sources. LUFTBRO_UPDATE_FEED points at another latest.json (testing).
+/// sources. LUFTBRO_UPDATE_FEED points at another latest.json and
+/// LUFTBRO_UPDATE_KEY at another public key (testing).
 @MainActor
 @Observable
 final class Updater {
@@ -49,7 +54,11 @@ final class Updater {
     private static let lastCheckKey = "lastUpdateCheck"
     static let releasesPage = URL(string: "https://github.com/luftbro/luftbro/releases/latest")!
 
+    /// The public half of the release signing key (base64, raw Ed25519).
+    private static let updateKey = "WVw7TweVdKxQhn7PCjkYE+nXLx0jilfwqUa8xulu+S8="
+
     private let feed: URL?
+    private let publicKey: Curve25519.Signing.PublicKey?
     /// Downloads with limits, so a stalled connection ends instead of leaving
     /// "Downloading the update…" up for good. A request may wait a minute for
     /// data, the whole zip a quarter of an hour.
@@ -68,6 +77,8 @@ final class Updater {
         } else {
             feed = nil
         }
+        let key = ProcessInfo.processInfo.environment["LUFTBRO_UPDATE_KEY"].flatMap { $0.isEmpty ? nil : $0 } ?? Self.updateKey
+        publicKey = Data(base64Encoded: key).flatMap { try? Curve25519.Signing.PublicKey(rawRepresentation: $0) }
         UserDefaults.standard.register(defaults: [Self.autoCheckKey: true])
     }
 
@@ -126,11 +137,13 @@ final class Updater {
         guard let feed, !isBusy else { return }
         state = .checking
         do {
-            var req = URLRequest(url: feed, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
-            req.setValue("Luftbro/\(Self.currentVersion)", forHTTPHeaderField: "User-Agent")
-            let (data, response) = try await URLSession.shared.data(for: req)
-            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                throw UpdateError("The update server answered HTTP \(http.statusCode).")
+            let data = try await fetch(feed)
+            let sigURL = feed.deletingLastPathComponent().appendingPathComponent(feed.lastPathComponent + ".sig")
+            let sigText = try await fetch(sigURL, ifMissing: "This release isn’t signed, so Luftbro won’t install it.")
+            guard let sig = Data(base64Encoded: String(decoding: sigText, as: UTF8.self)
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)),
+                  publicKey?.isValidSignature(sig, for: data) == true else {
+                throw UpdateError("This release isn’t signed with Luftbro’s key, so Luftbro won’t install it.")
             }
             let r = try JSONDecoder().decode(Release.self, from: data)
             guard r.looksGenuine else { throw UpdateError("The update feed doesn’t look like Luftbro’s.") }
@@ -139,6 +152,17 @@ final class Updater {
         } catch {
             state = .checkFailed(error.localizedDescription)
         }
+    }
+
+    private func fetch(_ url: URL, ifMissing: String? = nil) async throws -> Data {
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+        req.setValue("Luftbro/\(Self.currentVersion)", forHTTPHeaderField: "User-Agent")
+        let (data, response) = try await URLSession.shared.data(for: req)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            if http.statusCode == 404, let ifMissing { throw UpdateError(ifMissing) }
+            throw UpdateError("The update server answered HTTP \(http.statusCode).")
+        }
+        return data
     }
 
     private var isBusy: Bool {

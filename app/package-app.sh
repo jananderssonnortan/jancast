@@ -10,11 +10,11 @@
 # The app is ad-hoc signed (no Developer ID), so Gatekeeper asks once.
 set -euo pipefail
 
-VERSION="${VERSION:-1.0}"
-PY_VERSION=3.14.9
-PY_RELEASE=20261021
-PY_SHA256=226d696642a8a53d03b4d5b255b1c319b1575a6d44bd723a953c9f507755e36a
-FFMPEG_VERSION=8.1.2
+VERSION="${VERSION:-1.0.1}"
+PY_VERSION=3.14.10
+PY_RELEASE=20261026
+PY_SHA256=30a18bcb9ab75e485b4bf4e5d783dde165571e7e42c56dff47a2d2c5345183a4
+FFMPEG_VERSION=8.1.3
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$APP_DIR/.." && pwd)"
@@ -120,7 +120,8 @@ fi
 echo "Built $DMG ($(du -h "$DMG" | cut -f1))"
 
 # ---- Updater: the app as a zip, and latest.json describing it ----
-# Upload all three to the release; the app reads
+# All three go on the release; scripts/publish_release.py adds latest.json.sig,
+# the signature the app checks before it trusts
 # releases/latest/download/latest.json (Updater.swift).
 ZIP="$ROOT/build/Luftbro-$VERSION.zip"
 rm -f "$ZIP"

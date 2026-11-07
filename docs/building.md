@@ -72,6 +72,16 @@ the app `LUFTBRO_API_PORT=8722`.
 the keyboard handling and the engineering behind them. [`API.md`](API.md) is the
 contract between the app and the backend.
 
+### Releasing
+
+Bump the version in `luftbro/__init__.py`, `app/build-app.sh` and
+`app/package-app.sh`, add `docs/releases/<version>.md` and push. The Release
+workflow on GitHub builds and checks the app and makes a draft release.
+`.venv/bin/python scripts/publish_release.py <version>` then signs its
+`latest.json` with the key in `~/.config/luftbro-release` and publishes it.
+The app installs only updates signed with that key, and the key never goes to
+GitHub.
+
 ## Environment variables
 
 None of these are needed to use Luftbro. They're for development and tests.
@@ -90,6 +100,7 @@ None of these are needed to use Luftbro. They're for development and tests.
 | `LUFTBRO_MOCK=1` | Same as `--mock`: the app runs against a simulated backend |
 | `LUFTBRO_MOCK_SPEED`, `LUFTBRO_MOCK_AUTOPLAY=1`, `LUFTBRO_MOCK_START`, `LUFTBRO_MOCK_FAIL` | Tune the mock: run it faster, start playing at launch, start near a given second, fail after N seconds |
 | `LUFTBRO_UPDATE_FEED` | Points the update check at another `latest.json` |
+| `LUFTBRO_UPDATE_KEY` | The public key (base64) that feed's `latest.json.sig` is checked against |
 | `LUFTBRO_SNAPSHOT_*` | In-app window captures to PNG, for screenshots ([`DESIGN.md`](DESIGN.md#engineering-notes)) |
 
 ## Where things are kept

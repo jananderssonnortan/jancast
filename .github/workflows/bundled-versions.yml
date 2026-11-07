@@ -1,0 +1,89 @@
+name: Bundled versions
+
+# Dependabot doesn't see the ffmpeg and Python that app/package-app.sh puts in
+# the app. Every week this looks for newer patch releases of both and, if there
+# are any, opens a pull request and starts a build-only Release run on it, which
+# merges the pull request when the build and its tests pass.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Look for newer ffmpeg and Python
+        run: |
+          f=app/package-app.sh
+          get() { sed -n "s/^$1=//p" "$f"; }
+          ff=$(get FFMPEG_VERSION); py=$(get PY_VERSION); rel=$(get PY_RELEASE)
+          title=(); body=""
+
+          # ffmpeg: the newest release in the same major.minor line.
+          ff_line=$(echo "$ff" | cut -d. -f1-2)
+          releases=$(curl -fsSL https://ffmpeg.org/releases/ | grep -oE 'ffmpeg-[0-9]+\.[0-9]+(\.[0-9]+)?\.tar\.xz' |
+                     sed 's/^ffmpeg-//; s/\.tar\.xz$//' | sort -uV)
+          new_ff=$(echo "$releases" | grep -E "^${ff_line//./\\.}(\.[0-9]+)?$" | tail -1)
+          if [ -n "$new_ff" ] && [ "$new_ff" != "$ff" ]; then
+            sed -i "s/^FFMPEG_VERSION=.*/FFMPEG_VERSION=$new_ff/" "$f"
+            sed -i "s/FFmpeg ${ff//./\\.} source/FFmpeg $new_ff source/; s/ffmpeg-${ff//./\\.}\.tar/ffmpeg-$new_ff.tar/" THIRD_PARTY_NOTICES.md
+            title+=("ffmpeg $new_ff")
+            body+="- ffmpeg $ff → $new_ff ([security fixes by version](https://ffmpeg.org/security.html))"$'\n'
+          fi
+          newest_ff=$(echo "$releases" | tail -1)
+          if [ "$newest_ff" != "${new_ff:-$ff}" ]; then
+            echo "ffmpeg $newest_ff is out, in a newer line than $ff_line. Moving to it is done by hand." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Python: the newest python-build-standalone build of the same minor version.
+          # A newer build matters even for the same Python, as it brings OpenSSL, SQLite and others up to date.
+          py_line=$(echo "$py" | cut -d. -f1-2)
+          new_rel=$(gh api repos/astral-sh/python-build-standalone/releases/latest --jq .tag_name)
+          asset=$(gh release download "$new_rel" -R astral-sh/python-build-standalone -p SHA256SUMS -O - |
+                  grep -E "  cpython-${py_line//./\\.}\.[0-9]+\+$new_rel-aarch64-apple-darwin-install_only\.tar\.gz$" | sort -V -k2 | tail -1 || true)
+          new_sha=${asset%% *}
+          new_py=$(echo "$asset" | sed -E 's/.*cpython-([0-9.]+)\+.*/\1/')
+          if [[ $new_rel =~ ^[0-9]+$ && $new_sha =~ ^[0-9a-f]{64}$ ]] && [ "$new_rel" -gt "$rel" ]; then
+            sed -i -e "s/^PY_VERSION=.*/PY_VERSION=$new_py/" -e "s/^PY_RELEASE=.*/PY_RELEASE=$new_rel/" \
+                   -e "s/^PY_SHA256=.*/PY_SHA256=$new_sha/" "$f"
+            title+=("Python $new_py ($new_rel)")
+            body+="- Python $py → $new_py, python-build-standalone $rel → [$new_rel](https://github.com/astral-sh/python-build-standalone/releases/tag/$new_rel)"$'\n'
+          fi
+
+          if [ -z "$body" ]; then
+            echo "ffmpeg $ff and Python $py ($rel) are the newest." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          subject="Bundle $(printf '%s and ' "${title[@]}" | sed 's/ and $//')"
+          branch=bundled-versions
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git switch -qc "$branch"
+          git commit -qam "$subject"
+          if git fetch -q origin "$branch" 2>/dev/null && git diff --quiet HEAD FETCH_HEAD; then
+            echo "Already proposed: $subject" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git push -qf origin "$branch"
+
+          pr_body="${body}
+          The build-only Release run on this branch builds the app with these versions, runs the tests on the bundled Python and merges this pull request when they pass."
+          if [ "$(gh pr view "$branch" --json state --jq .state 2>/dev/null)" = OPEN ]; then
+            gh pr edit "$branch" --title "$subject" --body "$pr_body"
+          else
+            gh pr create --head "$branch" --title "$subject" --body "$pr_body"
+          fi
+          gh workflow run release.yml --ref "$branch" -f build_only=true
+          echo "$subject" >> "$GITHUB_STEP_SUMMARY"

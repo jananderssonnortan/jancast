@@ -1,0 +1,79 @@
+name: Release due
+
+# Keeps one issue, assigned to the maintainer, open while changes to the app
+# wait for a release: right away for security updates and a new bundled ffmpeg
+# (it reads every file the app opens), otherwise once the oldest unreleased
+# change is PILE_UP_DAYS old. Publishing a release closes it.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  MAINTAINER: jananderssonnortan
+  PILE_UP_DAYS: 28
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Check for unreleased changes
+        run: |
+          tag=$(gh release view --json tagName --jq .tagName)
+          # Only what goes into the app counts; docs, tests and CI don't need a release.
+          changes=$(git log --reverse --format='%h %cs %s' "$tag..HEAD" -- \
+                    luftbro app requirements.txt LICENSE THIRD_PARTY_NOTICES.md)
+          issue=$(gh issue list --label release-due --state open --json number --jq '.[0].number // empty')
+
+          if [ -z "$changes" ]; then
+            if [ -n "$issue" ]; then gh issue close "$issue" --comment "Released in $tag."; fi
+            echo "Everything is released in $tag." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          urgent=$(echo "$changes" | grep -E 'python-security group| Bundle ffmpeg ' || true)
+          oldest=$(echo "$changes" | head -1 | cut -d' ' -f2)
+          age=$(( ( $(date +%s) - $(date -d "$oldest" +%s) ) / 86400 ))
+          if [ -n "$urgent" ]; then
+            title="Release due: security updates since $tag"
+          elif [ "$age" -ge "$PILE_UP_DAYS" ]; then
+            title="Release due: changes since $tag waiting $age days"
+          else
+            echo "Unreleased changes, oldest $age days old; not due yet." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          body="Changes to the app on main that are not in $tag:
+
+          $(echo "$changes" | sed 's/^/- /')
+          ${urgent:+
+          Security-related:
+
+          $(echo "$urgent" | sed 's/^/- /')
+          }
+          To release: bump the version, add docs/releases/<version>.md, run the [Release workflow]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/workflows/release.yml), then \`.venv/bin/python scripts/publish_release.py <version>\` to sign and publish its draft. Publishing closes this issue."
+
+          if [ -z "$issue" ]; then
+            gh label create release-due --color B60205 --description "Changes waiting for a release" --force
+            gh issue create --title "$title" --body "$body" --label release-due --assignee "$MAINTAINER"
+          else
+            was=$(gh issue view "$issue" --json title --jq .title)
+            gh issue edit "$issue" --title "$title" --body "$body"
+            if [ -n "$urgent" ] && [[ $was != *security* ]]; then
+              gh issue comment "$issue" --body "Security updates are now waiting for a release too."
+            fi
+          fi
+          echo "$title" >> "$GITHUB_STEP_SUMMARY"

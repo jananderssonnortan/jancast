@@ -140,7 +140,7 @@ You need a Mac with Apple Silicon (M1 or later) on macOS 14 or later, and an
 Apple TV on the same network. I've tested it with tvOS 26. Without a TV it
 plays on the Mac. On an Intel Mac you can [build it yourself](docs/building.md).
 
-Download `Luftbro-1.0.dmg` from the
+Download `Luftbro-1.0.1.dmg` from the
 [latest release](https://github.com/luftbro/luftbro/releases/latest), open it
 and drag Luftbro to Applications. Python and ffmpeg are inside the app, so
 there's nothing else to install.

@@ -191,8 +191,10 @@ It records all the time, so you can open it after something went wrong.
 ## Updates and settings
 
 The downloaded app checks GitHub for a newer release once a day. When there is
-one, a line above Recent says so. **Install** downloads it, checks it against
-the release's checksum, quits Luftbro, replaces it and opens the new one.
+one, a line above Recent says so. Luftbro only offers a release signed with
+its maintainer's key, which isn't kept on GitHub. **Install** downloads it,
+checks it against the signed checksum, quits Luftbro, replaces it and opens
+the new one.
 Nothing installs without that click. **Luftbro → Check for Updates…** checks
 right away. For this to work Luftbro has to be in a folder it can write to,
 like Applications. macOS may ask once whether Luftbro may modify apps; allow it.
