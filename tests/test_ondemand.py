@@ -9,6 +9,7 @@ timestamps and audio/video kept in sync.
 import hashlib
 import shutil
 import subprocess
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -251,6 +252,32 @@ class FfmpegTest(TempDirMixin, unittest.TestCase):
                                       "-of", "csv=p=0", str(one / init)],
                                      capture_output=True, text=True, check=True).stdout.split()
             self.assertEqual(len(streams), 1, f"{init} has tracks {streams}")
+
+    def test_file_cut_short_fails_instead_of_waiting(self):
+        """A source that ends early (unplugged disk, dropped share) fails the
+        stream with a reason; requests past it don't each wait the full time."""
+        if self.clip.suffix != ".mkv":
+            self.skipTest("an MP4 cut short loses its index (at the end) and fails at the start")
+        clip = self.make_tempdir() / "clip.mkv"
+        shutil.copy(self.clip, clip)
+        m = media.probe(clip)
+        index = keyframes.video_keyframes(clip)
+        with open(clip, "r+b") as f:
+            f.truncate(int(m.size_bytes * 0.3))
+        warnings = []
+        od = ondemand.OnDemand(m, m.audio[0], None, self.make_tempdir(), index,
+                               on_warning=warnings.append)
+        try:
+            od.start(0)
+            od.wait_ready(0)
+            began = time.monotonic()
+            for i in range(od.count):
+                od.wait_for(f"/seg_video_{i:05d}.m4s", timeout=8)
+            self.assertLess(time.monotonic() - began, 8)
+        finally:
+            od.stop()
+        self.assertTrue(od.failed)
+        self.assertIn(od.failed_reason, warnings)
 
     def test_timestamps_continuous_and_in_sync(self):
         out, od = self.segments(1, [6, 3])

@@ -48,6 +48,7 @@ AHEAD_SEGMENTS = 30         # produce at most this many segments past the furthe
 RESTART_GAP = 4             # a request this far past what the run is making = a jump
 TIMELINE_OFFSET_S = 10.0    # added to every timestamp (tfdt must not be negative)
 WAIT_TIMEOUT_S = 25.0       # a request waits at most this long for its segment
+END_SLACK_S = 10.0          # a run ending this close to the end has reached it
 SUBTITLE_FILE = "stream_video{}.vtt"     # name pattern hls_server.classify knows
 VIDEO_SEG = "seg_video_{:05d}.m4s"
 AUDIO_SEG = "seg_audio_{:05d}.m4s"
@@ -573,15 +574,39 @@ class OnDemand:
         tmp.replace(self.outdir / name)
 
     def run_progress(self, run):
+        short = run is self.run and run.done and run.next_index["v"] < self.count and not run.cancelled
+        rc = None
+        if short:
+            # Both pipes are at EOF, so ffmpeg is exiting; its code says whether it failed.
+            try:
+                rc = run.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                pass
         with self.cond:
-            if run is self.run and run.done and run.next_index["v"] < self.count and not run.cancelled:
-                # ffmpeg stopped early without being asked to.
-                if run.proc.poll() not in (None, 0):
+            if short and run is self.run and not run.cancelled and not self.failed_reason:
+                # ffmpeg stopped early without being asked to. An input that
+                # ends early (unplugged disk, dropped share) exits with 0.
+                if rc not in (None, 0):
                     self.failed_reason = "ffmpeg failed: " + " | ".join(run.stderr_tail[-3:])
+                elif self.starts[run.next_index["v"]] < self.duration - END_SLACK_S:
+                    self.failed_reason = self._ended_early_reason(run)
+                if self.failed_reason:
+                    self.warn(self.failed_reason)
             elapsed = time.monotonic() - run.started_at
             if run is self.run and elapsed > 0.5 and not run.throttled:
                 self._speed = round(run.produced_s / elapsed, 1)
             self.cond.notify_all()
+
+    def _ended_early_reason(self, run):
+        at = self.starts[run.next_index["v"]]
+        try:
+            size = os.stat(self.media.path).st_size
+        except OSError as e:
+            return f"The file can't be read any more ({e.strerror}); the stream ends at {at:.0f} s"
+        if self.media.size_bytes and size < self.media.size_bytes:
+            return f"The file got shorter while playing; the stream ends at {at:.0f} s"
+        tail = " | ".join(run.stderr_tail[-3:])
+        return f"ffmpeg stopped reading the file at {at:.0f} s" + (f": {tail}" if tail else "")
 
     def wait_for_demand(self, run, track, index):
         """Called by a run's reader before a new segment: block while it is
@@ -599,6 +624,7 @@ class OnDemand:
             self.restarts += 1
             threading.Thread(target=old.stop, daemon=True).start()
         if not self._stopped:
+            self.failed_reason = None       # a jump tries the file again
             self.run = Run(self, index)
 
     def wait_for(self, path, timeout=WAIT_TIMEOUT_S):
@@ -658,7 +684,7 @@ class OnDemand:
             if run is None or index < run.start_index or index > run.next_index[track] + RESTART_GAP:
                 self._restart(index)
             self.cond.notify_all()
-            while not file.exists() and not self._stopped:
+            while not file.exists() and not self._stopped and not self.failed_reason:
                 left = deadline - time.monotonic()
                 if left <= 0:
                     return
