@@ -140,6 +140,7 @@ class ThreadSafetyTest(unittest.TestCase):
         n_threads, n = 8, 100     # stay under the deque caps
         stop = threading.Event()
         seen = []
+        sent = []                 # each sample's tx_bps; the samples deque may drop old ones
         errors = []
 
         def produce():
@@ -160,7 +161,7 @@ class ThreadSafetyTest(unittest.TestCase):
                     seen.extend(x["seq"] for x in requests + events)
                     last = seq
                     tm.network_summary()
-                    tm.sample({})
+                    sent.append(tm.sample({})["tx_bps"])
                 except Exception as e:  # noqa: BLE001
                     errors.append(e)
 
@@ -182,8 +183,8 @@ class ThreadSafetyTest(unittest.TestCase):
         _, _, requests, events = tm.snapshot(max(seen) if seen else 0)
         seen.extend(x["seq"] for x in requests + events)
         self.assertEqual(sorted(seen), sorted(seqs))
-        sent = sum(s["tx_bps"] for s in tm.samples) + tm.sample({})["tx_bps"]
-        self.assertEqual(sent, n_threads * n * 8)
+        sent.append(tm.sample({})["tx_bps"])
+        self.assertEqual(sum(sent), n_threads * n * 8)
 
 
 if __name__ == "__main__":
