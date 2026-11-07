@@ -13,7 +13,7 @@ does bundle them, unmodified, in `Luftbro.app/Contents/Resources`:
   packages below installed by pip (each one's licence is in its
   `*.dist-info` folder under `python/lib/python3.14/site-packages`).
 - `ffmpeg` and `ffprobe`, built from the unmodified
-  [FFmpeg 8.1.2 source](https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz) without
+  [FFmpeg 8.1.3 source](https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz) without
   any GPL or non-free parts, so under the LGPL-2.1-or-later. The exact configure
   line is in `package-app.sh`; `licenses/` in the app has the LGPL text.
 
