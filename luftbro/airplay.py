@@ -4,6 +4,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -169,13 +170,27 @@ def save_state(state):
     write_private_json(config_dir() / "state.json", state, indent=2)
 
 
+_state_lock = threading.Lock()
+
+
+def update_state(**changes):
+    """Merge `changes` into state.json. API threads and the event loop both
+    write it, so reading and writing happen under one lock."""
+    with _state_lock:
+        save_state({**load_state(), **changes})
+
+
 class PrivateFileStorage(FileStorage):
-    """pyatv's file storage (pairing credentials), kept readable by this user
-    only: pyatv writes it with the default mode, so every save tightens it."""
+    """pyatv's file storage (pairing credentials), readable by this user only
+    and written atomically: pyatv rewrites the file in place, and a crash
+    midway would leave credentials that no longer load."""
 
     async def save(self):
         await super().save()
-        make_private(self._filename)
+        make_private(self._filename)        # a file from before, with the default mode
+
+    def _save_file(self, dumped):
+        write_private_json(self._filename, dumped)
 
 
 # A device is either a pyatv config or a simulator.SimulatedDevice (duck-typed:
@@ -281,7 +296,7 @@ class Devices:
         """Re-check which known devices answer, without a Bonjour scan."""
         await self.reach.probe_known()
         known = {i: d for i, d in self.reach.known.items() if i not in self.simulated}
-        save_state({**load_state(), "known_devices": known})
+        update_state(known_devices=known)
 
     def status(self, device_id):
         return self.reach.status(device_id)

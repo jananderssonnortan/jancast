@@ -226,7 +226,7 @@ async def cmd_play(args):
     if devices.needs_pairing(conf):
         conf = await pair(devices, conf)
     if not airplay.is_simulated(conf):
-        airplay.save_state({**airplay.load_state(), "last_device": conf.identifier})
+        airplay.update_state(last_device=conf.identifier)
 
     telemetry = Telemetry(echo_events=args.verbose)
     session = Session(telemetry, devices, media, audio, sub, conf, stereo=args.stereo,

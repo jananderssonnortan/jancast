@@ -258,7 +258,7 @@ class Controller:
         self.call(start())
         self._ensure_thumbs(media)
         if not airplay.is_simulated(conf):
-            airplay.save_state({**airplay.load_state(), "last_device": conf.identifier})
+            airplay.update_state(last_device=conf.identifier)
         return {"ok": True}
 
     def control(self, body):

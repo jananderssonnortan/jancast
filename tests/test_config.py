@@ -109,6 +109,28 @@ class StateFilesTest(TempDirMixin, unittest.TestCase):
             self.assertEqual(mode(path), 0o600)
         asyncio.run(run())
 
+    def test_pyatv_credentials_survive_a_failed_save(self):
+        import asyncio
+        from unittest import mock
+        from luftbro import config
+        from luftbro.airplay import PrivateFileStorage
+        path = self.dir / "pyatv.json"
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+        storage = PrivateFileStorage(str(path), loop)
+        storage._save_file({"devices": ["paired"]})
+        with mock.patch.object(config.json, "dumps", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                storage._save_file({"devices": []})
+        self.assertEqual(path.read_text(), '{"devices": ["paired"]}')
+        self.assertEqual(sorted(p.name for p in self.dir.iterdir()), ["pyatv.json"])
+
+    def test_state_updates_merge(self):
+        from luftbro import airplay
+        airplay.update_state(last_device="X")
+        airplay.update_state(known_devices={"Y": {}})
+        self.assertEqual(airplay.load_state(), {"last_device": "X", "known_devices": {"Y": {}}})
+
 
 if __name__ == "__main__":
     unittest.main()
