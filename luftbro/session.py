@@ -7,6 +7,7 @@ import math
 import os
 import shutil
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -124,6 +125,9 @@ class Session:
         self._grace_until = None        # waits before this are start-up after play/resume
         self._stale_empty_logged = False
         self._history_saved_at = 0.0
+        self._history_gen = 0               # the newest save; older ones still waiting are dropped
+        self._history_lock = threading.Lock()
+        self._history_pending = None        # the periodic save on a worker thread
         self._downloading = media.path if media.partial else None   # "movie.mkv.part"
         self._fresh_rtt = None      # (rtt_ms | None) from a probe since the last sample
         self._play_task = None
@@ -271,6 +275,9 @@ class Session:
             for t in (self._early_connect, self._remote_task):
                 if t:
                     t.cancel()
+            if self._remote:                     # opened while preparing, never played
+                self._remote.close()
+                self._remote = None
             if self._early_connect and self._early_connect.done() and not self._early_connect.cancelled() \
                     and self._early_connect.exception() is None:
                 self._early_connect.result().close()     # opened but never used
@@ -534,7 +541,7 @@ class Session:
             self.user_paused = False
             self._set_phase("playing")
         if now - self._history_saved_at >= HISTORY_EVERY_S:
-            self._save_history()
+            self._save_history(background=True)
 
     def _stale_after_seek(self, info, position, now):
         """A report from before the latest seek took effect: the player still at
@@ -637,22 +644,45 @@ class Session:
             self._set_phase("stopped", message=f"Stopped{where}")
             self._save_history()
 
-    def _save_history(self, finished=False):
-        """Remember where we are so the app can offer to resume later."""
+    def _save_history(self, finished=False, background=False):
+        """Remember where we are so the app can offer to resume later.
+
+        `background`: the periodic save, on a worker thread - history.record
+        reads the file's details, which can block for long on a sleeping
+        network share. A newer save supersedes one still waiting, so a slow
+        periodic save can't land after the final one."""
         pos = self.playback["position"]
         simulated = airplay.is_simulated(self.conf) and not airplay.is_local(self.conf)
         if simulated or (pos is None and not finished):
             return
+        if background and self._history_pending and not self._history_pending.done():
+            return
         self._history_saved_at = time.time()
+        self._history_gen += 1
+        gen = self._history_gen
+        details = dict(position=pos or 0, duration=self.media.duration,
+                       audio=self.media.audio.index(self.audio) + 1,
+                       subtitle=self.media.subs.index(self.sub) + 1 if self.sub else 0,
+                       device_id=self.conf.identifier, stereo=self.stereo, finished=finished,
+                       subtitle_delay=self.subtitle_delay, subtitle_scale=self.subtitle_scale)
+
+        def write():
+            with self._history_lock:
+                if gen != self._history_gen:
+                    return
+                try:
+                    history.record(self.media.path, **details)
+                except (OSError, ValueError) as e:
+                    self.telemetry.event("warn", "app", f"Could not save playback position: {e}")
+
         try:
-            history.record(
-                self.media.path, position=pos or 0, duration=self.media.duration,
-                audio=self.media.audio.index(self.audio) + 1,
-                subtitle=self.media.subs.index(self.sub) + 1 if self.sub else 0,
-                device_id=self.conf.identifier, stereo=self.stereo, finished=finished,
-                subtitle_delay=self.subtitle_delay, subtitle_scale=self.subtitle_scale)
-        except (OSError, ValueError) as e:
-            self.telemetry.event("warn", "app", f"Could not save playback position: {e}")
+            loop = asyncio.get_running_loop() if background else None
+        except RuntimeError:
+            loop = None
+        if loop:
+            self._history_pending = loop.run_in_executor(None, write)
+        else:
+            write()
 
     def _end_stall(self):
         if self._stall_began is not None:

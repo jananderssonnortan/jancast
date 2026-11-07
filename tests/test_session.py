@@ -5,6 +5,8 @@ no network, no device).
 """
 
 import asyncio
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -448,6 +450,31 @@ class PlaybackStateTest(TempDirMixin, unittest.TestCase):
     def test_no_history_before_the_tv_reports(self):
         self.s._save_history()
         self.assertIsNone(history.resume_info(self.s.media.path))
+
+
+class HistoryOffTheLoopTest(TempDirMixin, unittest.IsolatedAsyncioTestCase):
+    async def test_periodic_save_does_not_block_and_the_final_save_lands_last(self):
+        media = make_media(self.make_tempdir(), [video_stream(0), audio_stream(1)], duration=600.0)
+        s = Session(Telemetry(), None, media, media.audio[0], None, StubConf())
+        s.playback["position"] = 100.0
+        entered, gate, saved = threading.Event(), threading.Event(), []
+
+        def slow_record(path, **details):     # a sleeping network share
+            if not details["finished"]:
+                entered.set()
+                gate.wait(5)
+            saved.append(details["finished"])
+
+        with mock.patch.object(session_mod.history, "record", slow_record):
+            began = time.monotonic()
+            s._save_history(background=True)
+            s._save_history(background=True)  # one still running: skipped
+            self.assertLess(time.monotonic() - began, 0.5)
+            self.assertTrue(await asyncio.to_thread(entered.wait, 5))
+            threading.Timer(0.2, gate.set).start()
+            s._save_history(finished=True)
+            await s._history_pending
+        self.assertEqual(saved, [False, True])
 
 
 class FakeStream:
