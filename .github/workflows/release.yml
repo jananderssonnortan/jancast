@@ -25,7 +25,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       BUILD_ONLY: ${{ inputs.build_only }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Check the version
         id: version
@@ -43,7 +43,7 @@ jobs:
 
       # Compiling ffmpeg takes most of the build; it is redone only for a new ffmpeg version.
       - id: ffmpeg-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: app/.build/dist/ffmpeg-${{ steps.version.outputs.ffmpeg }}
           key: ffmpeg-${{ steps.version.outputs.ffmpeg }}-macos14-arm64
@@ -52,7 +52,7 @@ jobs:
         run: mkdir -p build && VERSION="${{ steps.version.outputs.version }}" bash app/package-app.sh
 
       - if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: app/.build/dist/ffmpeg-${{ steps.version.outputs.ffmpeg }}
           key: ffmpeg-${{ steps.version.outputs.ffmpeg }}-macos14-arm64
@@ -83,7 +83,7 @@ jobs:
             echo "::error::The build folder's path is inside the app"; exit 1
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Luftbro-${{ steps.version.outputs.version }}
           path: |
