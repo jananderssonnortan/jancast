@@ -1,0 +1,92 @@
+name: Release
+
+# Builds the version in luftbro/__init__.py and makes a draft release of it.
+# The updater and the website only see published releases, so nothing reaches
+# anyone until the draft is published on GitHub.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_only:
+        description: "Build and check only, no release"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency: release
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BUILD_ONLY: ${{ inputs.build_only }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the version
+        id: version
+        run: |
+          v=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' luftbro/__init__.py)
+          for f in app/build-app.sh app/package-app.sh; do
+            grep -qxF "VERSION=\"\${VERSION:-$v}\"" "$f" || { echo "::error file=$f::VERSION in $f is not $v"; exit 1; }
+          done
+          [ -f "docs/releases/$v.md" ] || { echo "::error::docs/releases/$v.md is missing"; exit 1; }
+          if [ "$BUILD_ONLY" != true ] && gh release view "v$v" >/dev/null 2>&1; then
+            echo "::error::There is already a release v$v"; exit 1
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "ffmpeg=$(sed -n 's/^FFMPEG_VERSION=//p' app/package-app.sh)" >> "$GITHUB_OUTPUT"
+
+      # Compiling ffmpeg takes most of the build; it is redone only for a new ffmpeg version.
+      - uses: actions/cache@v4
+        with:
+          path: app/.build/dist/ffmpeg-${{ steps.version.outputs.ffmpeg }}
+          key: ffmpeg-${{ steps.version.outputs.ffmpeg }}-macos14-arm64
+
+      - name: Build
+        run: mkdir -p build && VERSION="${{ steps.version.outputs.version }}" bash app/package-app.sh
+
+      - name: Test with the bundled Python and ffmpeg
+        run: |
+          RES="app/.build/dist/package.noindex/Luftbro.app/Contents/Resources"
+          PATH="$PWD/$RES/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 \
+            "$RES/python/bin/python3" -m unittest discover -s tests
+
+      - name: Check the disk image
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          mnt=$(mktemp -d)
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "build/Luftbro-$v.dmg" >/dev/null
+          trap 'hdiutil detach "$mnt" >/dev/null' EXIT
+          app="$mnt/Luftbro.app"
+          plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$app/Contents/Info.plist"; }
+          [ "$(plist CFBundleIdentifier)" = com.luftbro.app ]
+          [ "$(plist CFBundleShortVersionString)" = "$v" ]
+          codesign --verify --deep --strict "$app"
+          "$app/Contents/Resources/bin/ffmpeg" -hide_banner -version | head -1
+          PYTHONPATH="$app/Contents/Resources/backend" PYTHONDONTWRITEBYTECODE=1 \
+            "$app/Contents/Resources/python/bin/Luftbro Backend" -c "import luftbro, pyatv; print('luftbro', luftbro.__version__)"
+          if grep -rIl "$GITHUB_WORKSPACE" "$app"; then
+            echo "::error::The build folder's path is inside the app"; exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Luftbro-${{ steps.version.outputs.version }}
+          path: |
+            build/Luftbro-${{ steps.version.outputs.version }}.dmg
+            build/Luftbro-${{ steps.version.outputs.version }}.zip
+            build/latest.json
+          retention-days: 7
+
+      - name: Create the draft release
+        if: inputs.build_only != true
+        run: |
+          v="${{ steps.version.outputs.version }}"
+          gh release create "v$v" --draft --target "$GITHUB_SHA" --title "Luftbro $v" \
+            --notes-file "docs/releases/$v.md" \
+            "build/Luftbro-$v.dmg" "build/Luftbro-$v.zip" build/latest.json
