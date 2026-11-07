@@ -426,14 +426,22 @@ class ServerTest(unittest.TestCase):
         except ConnectionResetError:
             pass                                       # (reset if the request was still in flight)
         held[0].close()                            # a slot frees up
+        # Until its handler notices the close, newcomers still get a 503 (not recorded).
+        before = len(self.tm.requests)
         deadline = time.time() + 3
         while True:
             try:
-                r, body = self.get("/init_video.mp4")
-                break
+                c = self.conn()
+                c.request("GET", f"/{self.srv.secret}/init_video.mp4")
+                r = c.getresponse()
+                body = r.read()
+                if r.status != 503:
+                    break
             except (OSError, http.client.HTTPException):
-                self.assertLess(time.time(), deadline, "slot was not released")
-                time.sleep(0.05)
+                pass
+            self.assertLess(time.time(), deadline, "slot was not released")
+            time.sleep(0.05)
+        self.last_request(before + 1)
         self.assertEqual((r.status, body), (200, b"I" * 100))
 
     def test_percent_encoded_names_are_decoded(self):

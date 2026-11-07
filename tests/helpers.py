@@ -25,9 +25,13 @@ PYTHON = sys.executable
 
 class TempDirMixin:
     def make_tempdir(self):
-        d = tempfile.mkdtemp(prefix="luftbro-test-")
+        """An empty folder with a fixed name: file names are read with their
+        folders, and a random one like "tmp_s5k" would read as season 5."""
+        d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, d, True)
-        return Path(d).resolve()
+        leaf = Path(d).resolve() / "luftbro-test"
+        leaf.mkdir()
+        return leaf
 
 
 def video_stream(index=0, codec="h264", width=1920, height=1080, **extra):
