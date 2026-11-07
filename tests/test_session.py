@@ -429,6 +429,22 @@ class PlaybackStateTest(TempDirMixin, unittest.TestCase):
         self.assertTrue(saved["watched"])
         self.assertIsNone(saved["resume_position"])
 
+    def test_stop_on_the_tv_keeps_the_resume_point(self):
+        self.play_to(100)
+        self.s._playback_ended()
+        self.assertEqual(self.s.phase, "stopped")
+        saved = history.resume_info(self.s.media.path)
+        self.assertFalse(saved["watched"])
+        self.assertGreaterEqual(saved["resume_position"], 100)
+
+    def test_playing_to_the_end_is_finished(self):
+        self.play_to(560)                    # within the last minute of 600 s
+        self.s._playback_ended()
+        self.assertEqual(self.s.phase, "finished")
+        saved = history.resume_info(self.s.media.path)
+        self.assertTrue(saved["watched"])
+        self.assertIsNone(saved["resume_position"])
+
     def test_no_history_before_the_tv_reports(self):
         self.s._save_history()
         self.assertIsNone(history.resume_info(self.s.media.path))

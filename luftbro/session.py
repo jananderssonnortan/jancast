@@ -254,8 +254,7 @@ class Session:
                             + (f" (from {self.start_position:.0f} s)" if self.start_position else ""))
             await self._play_until_done(self.start_position)
             self._end_stall()
-            self._set_phase("finished", message="Playback finished")
-            self._save_history(finished=True)
+            self._playback_ended()
         except asyncio.CancelledError:
             self._end_stall()
             self._set_phase("stopped", message="Stopped")
@@ -623,6 +622,20 @@ class Session:
             return None
         return Track("sub", 0, sub.codec if sub.file else "webvtt", lang=sub.lang, title=sub.title,
                      forced=sub.forced, file=path)
+
+    def _playback_ended(self):
+        """The player stopped by itself. Playing to the end and Stop on the TV's
+        remote look the same from here, so the position decides: within the
+        last 5 % (at least the last minute) it is finished and marked watched;
+        before that it is a stop that keeps the resume point."""
+        pos, dur = self.playback["position"], self.media.duration
+        if pos is not None and dur and pos >= dur - max(60.0, 0.05 * dur):
+            self._set_phase("finished", message="Playback finished")
+            self._save_history(finished=True)
+        else:
+            where = "" if airplay.is_local(self.conf) else " on the Apple TV"
+            self._set_phase("stopped", message=f"Stopped{where}")
+            self._save_history()
 
     def _save_history(self, finished=False):
         """Remember where we are so the app can offer to resume later."""
