@@ -42,7 +42,8 @@ jobs:
           echo "ffmpeg=$(sed -n 's/^FFMPEG_VERSION=//p' app/package-app.sh)" >> "$GITHUB_OUTPUT"
 
       # Compiling ffmpeg takes most of the build; it is redone only for a new ffmpeg version.
-      - uses: actions/cache@v4
+      - id: ffmpeg-cache
+        uses: actions/cache/restore@v4
         with:
           path: app/.build/dist/ffmpeg-${{ steps.version.outputs.ffmpeg }}
           key: ffmpeg-${{ steps.version.outputs.ffmpeg }}-macos14-arm64
@@ -50,11 +51,19 @@ jobs:
       - name: Build
         run: mkdir -p build && VERSION="${{ steps.version.outputs.version }}" bash app/package-app.sh
 
-      - name: Test with the bundled Python and ffmpeg
+      - if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: app/.build/dist/ffmpeg-${{ steps.version.outputs.ffmpeg }}
+          key: ffmpeg-${{ steps.version.outputs.ffmpeg }}-macos14-arm64
+
+      # The tests make their sample clips with encoders (x264, x265, VP9) that the
+      # bundled LGPL ffmpeg leaves out, so they use Homebrew's ffmpeg with the bundled Python.
+      - name: Test with the bundled Python
         run: |
-          RES="app/.build/dist/package.noindex/Luftbro.app/Contents/Resources"
-          PATH="$PWD/$RES/bin:$PATH" PYTHONDONTWRITEBYTECODE=1 \
-            "$RES/python/bin/python3" -m unittest discover -s tests
+          brew install ffmpeg
+          PYTHONDONTWRITEBYTECODE=1 \
+            app/.build/dist/package.noindex/Luftbro.app/Contents/Resources/python/bin/python3 -m unittest discover -s tests
 
       - name: Check the disk image
         run: |
